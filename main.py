@@ -37,7 +37,8 @@ def setup_logging() -> None:
 
     # Local dev file logging with hourly rotation
     if os.getenv("HEROKU") != "true":
-        load_dotenv(".env")
+        from dotenv import load_dotenv
+        load_dotenv()
         os.makedirs("./log", exist_ok=True)
 
         # Hourly rotation: bot.log -> bot.log.YYYY-MM-DD_HH

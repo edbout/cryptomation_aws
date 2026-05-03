@@ -75,3 +75,6 @@ for i in {1..100}; do
     https://clob.polymarket.com
   sleep 0.05
 done > latencies.log
+
+
+StrongPass
