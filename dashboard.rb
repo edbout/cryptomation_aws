@@ -14,26 +14,33 @@ set :port, PORT
 # Turn off default Sinatra logging so it doesn't pollute our log
 disable :logging
 
-# Helper to read last N lines of log
 def read_log_lines(n = 1000)
   if File.exist?(LOG_PATH)
-    lines = File.readlines(LOG_PATH)
+    lines = File.readlines(LOG_PATH, encoding: "UTF-8")
     puts "DEBUG: read_log_lines – #{lines.size} lines read from #{LOG_PATH}"
-    lines[-n..-1] || []
+    puts "DEBUG: first 3 lines: #{lines[0..2].inspect}"
+    result = lines[-n..-1] || []
+    puts "DEBUG: returning #{result.size} lines (last #{n})"
+    result
   else
     ["ERROR: log file not found: #{LOG_PATH}"]
   end
 end
 
-# Optional: filter / highlight certain lines
+def read_log_lines(n = 1000)
+  [
+    "DEBUG: test line 1 [INFO]",
+    "DEBUG: test line 2 [ERROR]",
+    "DEBUG: test line 3 [INFO]"
+  ][-n..-1] || []
+end
+
 def styled_log_lines(lines)
+  puts "DEBUG: styled_log_lines – #{lines.size} lines before styling"
   lines.map do |line|
     line = CGI.escapeHTML(line)
-
-    # Highlight errors / important markers
     line = line.gsub(/(ERROR|TP|SL|crash|fatal)/i) { |m| "<mark class='err'>#{m}</mark>" }
     line = line.gsub(/(INFO|debug|DEBUG)/i) { |m| "<mark class='info'>#{m}</mark>" }
-
     line.strip
   end
 end
