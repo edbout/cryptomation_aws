@@ -125,7 +125,7 @@ __END__
   </header>
 
   <main>
-    <pre><%= raw log_lines.join("\n") %></pre>
+    <pre><%= log_lines.join("\n") %></pre>
   </main>
 
   <footer>Auto‑refreshing every 5 seconds. Press F5 to refresh manually.</footer>
