@@ -18,6 +18,7 @@ disable :logging
 def read_log_lines(n = 1000)
   if File.exist?(LOG_PATH)
     lines = File.readlines(LOG_PATH)
+    puts "DEBUG: read_log_lines – #{lines.size} lines read from #{LOG_PATH}"
     lines[-n..-1] || []
   else
     ["ERROR: log file not found: #{LOG_PATH}"]
