@@ -16,27 +16,19 @@ disable :logging
 
 def read_log_lines(n = 1000)
   if File.exist?(LOG_PATH)
+    # Force read into a variable and ensure it is not empty
     lines = File.readlines(LOG_PATH, encoding: "UTF-8")
-    puts "DEBUG: read_log_lines – #{lines.size} lines read from #{LOG_PATH}"
-    puts "DEBUG: first 3 lines: #{lines[0..2].inspect}"
-    result = lines[-n..-1] || []
-    puts "DEBUG: returning #{result.size} lines (last #{n})"
-    result
+    puts "DEBUG: read_log_lines – #{lines.size} lines read"
+    
+    # Return the last N lines, or all if less than N
+    result = lines.length > n ? lines[-n..-1] : lines
+    result || []
   else
     ["ERROR: log file not found: #{LOG_PATH}"]
   end
 end
 
-def read_log_lines(n = 1000)
-  [
-    "DEBUG: test line 1 [INFO]",
-    "DEBUG: test line 2 [ERROR]",
-    "DEBUG: test line 3 [INFO]"
-  ][-n..-1] || []
-end
-
 def styled_log_lines(lines)
-  puts "DEBUG: styled_log_lines – #{lines.size} lines before styling"
   lines.map do |line|
     line = CGI.escapeHTML(line)
     line = line.gsub(/(ERROR|TP|SL|crash|fatal)/i) { |m| "<mark class='err'>#{m}</mark>" }
