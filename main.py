@@ -9,7 +9,7 @@ import os
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Dict, Optional, List, Tuple, Any
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 from decimal import Decimal
 from collections import deque
 from dataclasses import dataclass
@@ -22,28 +22,31 @@ UTC = ZoneInfo("UTC")
 
 # Setup logging FIRST
 def setup_logging() -> None:
-    """Production logging setup - Heroku optimized."""
+    """Production logging setup with hourly log rotation."""
     logger = logging.getLogger()
-    logger.handlers.clear()  # prevent double-logging if any import ran basicConfig first
+    logger.handlers.clear()  # prevent double-logging
     logger.setLevel(logging.INFO)
 
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    
-    # Console handler (Heroku Logplex)
+
+    # Console handler (stdout)
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-    
-    # Local dev file logging
+
+    # Local dev file logging with hourly rotation
     if os.getenv("HEROKU") != "true":
-        from dotenv import load_dotenv
-        load_dotenv(".env")        
-        
+        load_dotenv(".env")
         os.makedirs("./log", exist_ok=True)
-        
-        file_handler = RotatingFileHandler(
-            "./log/bot.log", maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+
+        # Hourly rotation: bot.log -> bot.log.YYYY-MM-DD_HH
+        file_handler = TimedRotatingFileHandler(
+            filename="./log/bot.log",
+            when="H",              # rotate every hour
+            interval=1,            # 1 hour
+            backupCount=24,        # keep 24 hourly files (1 day)
+            encoding="utf-8",
         )
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)

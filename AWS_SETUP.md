@@ -54,4 +54,24 @@ rm -rf venv
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
+
+cd ~/polymarket-bot
+source venv/bin/activate
 pip install -r requirements.txt
+
+sudo dnf update -y
+sudo dnf install -y redis6
+
+sudo systemctl enable redis6
+sudo systemctl start redis6
+sudo systemctl status redis6
+
+sudo dnf swap curl-minimal curl-full
+sudo dnf swap libcurl-minimal libcurl-full
+
+for i in {1..100}; do
+  curl -s -o /dev/null -w "%{time_total}\n" \
+    -H "User-Agent: latency-test" \
+    https://clob.polymarket.com
+  sleep 0.05
+done > latencies.log
