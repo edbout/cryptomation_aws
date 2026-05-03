@@ -55,3 +55,10 @@ end
 get '/health' do
   { ok: true, time: Time.now.utc.iso8601 }.to_json
 end
+
+get '/debug' do
+  content_type :text
+  "LOG_PATH = #{LOG_PATH}\n" \
+  "File.exists?(LOG_PATH) = #{File.exist?(LOG_PATH).inspect}\n" \
+  "Dir.pwd = #{Dir.pwd}\n"
+end
