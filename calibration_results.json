@@ -1,0 +1,432 @@
+{
+  "BTCUSDT": {
+    "all": {
+      "time_window": 15,
+      "pct_tolerance": 0.15,
+      "min_matches": 20,
+      "n_records": 13140,
+      "dataset": "fairvalue"
+    },
+    "m0": {
+      "time_window": 30,
+      "pct_tolerance": 0.01,
+      "min_matches": 20,
+      "n_records": 1089,
+      "dataset": "fairvalue"
+    },
+    "m1": {
+      "time_window": 15,
+      "pct_tolerance": 0.005,
+      "min_matches": 15,
+      "n_records": 2995,
+      "dataset": "fairvalue"
+    },
+    "m2": {
+      "time_window": 15,
+      "pct_tolerance": 0.005,
+      "min_matches": 20,
+      "n_records": 3139,
+      "dataset": "fairvalue"
+    },
+    "m3": {
+      "time_window": 30,
+      "pct_tolerance": 0.1,
+      "min_matches": 20,
+      "n_records": 2875,
+      "dataset": "fairvalue"
+    },
+    "m4": {
+      "time_window": 15,
+      "pct_tolerance": 0.1,
+      "min_matches": 20,
+      "n_records": 3042,
+      "dataset": "fairvalue"
+    },
+    "signals_all": {
+      "time_window": 30,
+      "pct_tolerance": 0.05,
+      "min_matches": 10,
+      "n_records": 9981,
+      "dataset": "signals"
+    },
+    "signals_m0": {
+      "time_window": 15,
+      "pct_tolerance": 0.075,
+      "min_matches": 10,
+      "n_records": 888,
+      "dataset": "signals"
+    },
+    "signals_m1": {
+      "time_window": 15,
+      "pct_tolerance": 0.05,
+      "min_matches": 20,
+      "n_records": 1890,
+      "dataset": "signals"
+    },
+    "signals_m2": {
+      "time_window": 45,
+      "pct_tolerance": 0.05,
+      "min_matches": 5,
+      "n_records": 2513,
+      "dataset": "signals"
+    },
+    "signals_m3": {
+      "time_window": 15,
+      "pct_tolerance": 0.05,
+      "min_matches": 7,
+      "n_records": 2752,
+      "dataset": "signals"
+    },
+    "signals_m4": {
+      "time_window": 30,
+      "pct_tolerance": 0.1,
+      "min_matches": 20,
+      "n_records": 1938,
+      "dataset": "signals"
+    }
+  },
+  "DOGEUSDT": {
+    "all": {
+      "time_window": 15,
+      "pct_tolerance": 0.01,
+      "min_matches": 20,
+      "n_records": 8977,
+      "dataset": "fairvalue"
+    },
+    "m0": {
+      "time_window": 15,
+      "pct_tolerance": 0.01,
+      "min_matches": 20,
+      "n_records": 387,
+      "dataset": "fairvalue"
+    },
+    "m1": {
+      "time_window": 30,
+      "pct_tolerance": 0.01,
+      "min_matches": 20,
+      "n_records": 1853,
+      "dataset": "fairvalue"
+    },
+    "m2": {
+      "time_window": 15,
+      "pct_tolerance": 0.005,
+      "min_matches": 20,
+      "n_records": 2297,
+      "dataset": "fairvalue"
+    },
+    "m3": {
+      "time_window": 15,
+      "pct_tolerance": 0.075,
+      "min_matches": 5,
+      "n_records": 2310,
+      "dataset": "fairvalue"
+    },
+    "m4": {
+      "time_window": 15,
+      "pct_tolerance": 0.005,
+      "min_matches": 20,
+      "n_records": 2130,
+      "dataset": "fairvalue"
+    },
+    "signals_all": {
+      "time_window": 45,
+      "pct_tolerance": 0.075,
+      "min_matches": 20,
+      "n_records": 9786,
+      "dataset": "signals"
+    },
+    "signals_m0": {
+      "time_window": 60,
+      "pct_tolerance": 0.15,
+      "min_matches": 3,
+      "n_records": 512,
+      "dataset": "signals"
+    },
+    "signals_m1": {
+      "time_window": 20,
+      "pct_tolerance": 0.025,
+      "min_matches": 10,
+      "n_records": 1430,
+      "dataset": "signals"
+    },
+    "signals_m2": {
+      "time_window": 15,
+      "pct_tolerance": 0.15,
+      "min_matches": 15,
+      "n_records": 2105,
+      "dataset": "signals"
+    },
+    "signals_m3": {
+      "time_window": 60,
+      "pct_tolerance": 0.075,
+      "min_matches": 15,
+      "n_records": 2750,
+      "dataset": "signals"
+    },
+    "signals_m4": {
+      "time_window": 15,
+      "pct_tolerance": 0.075,
+      "min_matches": 20,
+      "n_records": 2989,
+      "dataset": "signals"
+    }
+  },
+  "ETHUSDT": {
+    "all": {
+      "time_window": 15,
+      "pct_tolerance": 0.005,
+      "min_matches": 20,
+      "n_records": 10483,
+      "dataset": "fairvalue"
+    },
+    "m0": {
+      "time_window": 15,
+      "pct_tolerance": 0.005,
+      "min_matches": 20,
+      "n_records": 793,
+      "dataset": "fairvalue"
+    },
+    "m1": {
+      "time_window": 15,
+      "pct_tolerance": 0.005,
+      "min_matches": 20,
+      "n_records": 2362,
+      "dataset": "fairvalue"
+    },
+    "m2": {
+      "time_window": 15,
+      "pct_tolerance": 0.005,
+      "min_matches": 20,
+      "n_records": 2518,
+      "dataset": "fairvalue"
+    },
+    "m3": {
+      "time_window": 30,
+      "pct_tolerance": 0.025,
+      "min_matches": 20,
+      "n_records": 2391,
+      "dataset": "fairvalue"
+    },
+    "m4": {
+      "time_window": 15,
+      "pct_tolerance": 0.1,
+      "min_matches": 5,
+      "n_records": 2419,
+      "dataset": "fairvalue"
+    },
+    "signals_all": {
+      "time_window": 60,
+      "pct_tolerance": 0.1,
+      "min_matches": 10,
+      "n_records": 9957,
+      "dataset": "signals"
+    },
+    "signals_m0": {
+      "time_window": 60,
+      "pct_tolerance": 0.005,
+      "min_matches": 3,
+      "n_records": 1119,
+      "dataset": "signals"
+    },
+    "signals_m1": {
+      "time_window": 45,
+      "pct_tolerance": 0.1,
+      "min_matches": 3,
+      "n_records": 2030,
+      "dataset": "signals"
+    },
+    "signals_m2": {
+      "time_window": 30,
+      "pct_tolerance": 0.1,
+      "min_matches": 5,
+      "n_records": 2459,
+      "dataset": "signals"
+    },
+    "signals_m3": {
+      "time_window": 20,
+      "pct_tolerance": 0.075,
+      "min_matches": 5,
+      "n_records": 2585,
+      "dataset": "signals"
+    },
+    "signals_m4": {
+      "time_window": 15,
+      "pct_tolerance": 0.025,
+      "min_matches": 20,
+      "n_records": 1764,
+      "dataset": "signals"
+    }
+  },
+  "SOLUSDT": {
+    "all": {
+      "time_window": 15,
+      "pct_tolerance": 0.025,
+      "min_matches": 15,
+      "n_records": 7660,
+      "dataset": "fairvalue"
+    },
+    "m0": {
+      "time_window": 30,
+      "pct_tolerance": 0.075,
+      "min_matches": 20,
+      "n_records": 374,
+      "dataset": "fairvalue"
+    },
+    "m1": {
+      "time_window": 15,
+      "pct_tolerance": 0.1,
+      "min_matches": 15,
+      "n_records": 1542,
+      "dataset": "fairvalue"
+    },
+    "m2": {
+      "time_window": 30,
+      "pct_tolerance": 0.075,
+      "min_matches": 20,
+      "n_records": 2038,
+      "dataset": "fairvalue"
+    },
+    "m3": {
+      "time_window": 15,
+      "pct_tolerance": 0.01,
+      "min_matches": 15,
+      "n_records": 1901,
+      "dataset": "fairvalue"
+    },
+    "m4": {
+      "time_window": 15,
+      "pct_tolerance": 0.075,
+      "min_matches": 3,
+      "n_records": 1805,
+      "dataset": "fairvalue"
+    },
+    "signals_all": {
+      "time_window": 45,
+      "pct_tolerance": 0.05,
+      "min_matches": 10,
+      "n_records": 9962,
+      "dataset": "signals"
+    },
+    "signals_m0": {
+      "time_window": 60,
+      "pct_tolerance": 0.1,
+      "min_matches": 3,
+      "n_records": 719,
+      "dataset": "signals"
+    },
+    "signals_m1": {
+      "time_window": 15,
+      "pct_tolerance": 0.075,
+      "min_matches": 3,
+      "n_records": 1735,
+      "dataset": "signals"
+    },
+    "signals_m2": {
+      "time_window": 20,
+      "pct_tolerance": 0.05,
+      "min_matches": 3,
+      "n_records": 2375,
+      "dataset": "signals"
+    },
+    "signals_m3": {
+      "time_window": 15,
+      "pct_tolerance": 0.15,
+      "min_matches": 20,
+      "n_records": 2830,
+      "dataset": "signals"
+    },
+    "signals_m4": {
+      "time_window": 30,
+      "pct_tolerance": 0.15,
+      "min_matches": 20,
+      "n_records": 2303,
+      "dataset": "signals"
+    }
+  },
+  "XRPUSDT": {
+    "all": {
+      "time_window": 15,
+      "pct_tolerance": 0.15,
+      "min_matches": 20,
+      "n_records": 8721,
+      "dataset": "fairvalue"
+    },
+    "m0": {
+      "time_window": 15,
+      "pct_tolerance": 0.1,
+      "min_matches": 7,
+      "n_records": 490,
+      "dataset": "fairvalue"
+    },
+    "m1": {
+      "time_window": 30,
+      "pct_tolerance": 0.15,
+      "min_matches": 20,
+      "n_records": 1866,
+      "dataset": "fairvalue"
+    },
+    "m2": {
+      "time_window": 15,
+      "pct_tolerance": 0.005,
+      "min_matches": 20,
+      "n_records": 2240,
+      "dataset": "fairvalue"
+    },
+    "m3": {
+      "time_window": 30,
+      "pct_tolerance": 0.005,
+      "min_matches": 20,
+      "n_records": 2124,
+      "dataset": "fairvalue"
+    },
+    "m4": {
+      "time_window": 15,
+      "pct_tolerance": 0.005,
+      "min_matches": 7,
+      "n_records": 2001,
+      "dataset": "fairvalue"
+    },
+    "signals_all": {
+      "time_window": 60,
+      "pct_tolerance": 0.05,
+      "min_matches": 20,
+      "n_records": 9958,
+      "dataset": "signals"
+    },
+    "signals_m0": {
+      "time_window": 45,
+      "pct_tolerance": 0.005,
+      "min_matches": 15,
+      "n_records": 784,
+      "dataset": "signals"
+    },
+    "signals_m1": {
+      "time_window": 60,
+      "pct_tolerance": 0.05,
+      "min_matches": 20,
+      "n_records": 1673,
+      "dataset": "signals"
+    },
+    "signals_m2": {
+      "time_window": 45,
+      "pct_tolerance": 0.1,
+      "min_matches": 7,
+      "n_records": 2496,
+      "dataset": "signals"
+    },
+    "signals_m3": {
+      "time_window": 30,
+      "pct_tolerance": 0.075,
+      "min_matches": 15,
+      "n_records": 2657,
+      "dataset": "signals"
+    },
+    "signals_m4": {
+      "time_window": 20,
+      "pct_tolerance": 0.075,
+      "min_matches": 20,
+      "n_records": 2348,
+      "dataset": "signals"
+    }
+  }
+}
