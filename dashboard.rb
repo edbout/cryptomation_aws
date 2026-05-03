@@ -1,6 +1,6 @@
 # dashboard.rb
 require 'sinatra'
-require 'sinatra/reloader' if development?
+require 'sinatra/reloader'
 require 'json'
 
 # Config
@@ -31,7 +31,7 @@ end
 def styled_log_lines(lines)
   lines.map do |line|
     line = CGI.escapeHTML(line)
-    line = line.gsub(/(ERROR|TP|SL|crash|fatal)/i) { |m| "<mark class='err'>#{m}</mark>" }
+    line = line.gsub(/(ERROR|crash|fatal)/i) { |m| "<mark class='err'>#{m}</mark>" }
     line = line.gsub(/(INFO|debug|DEBUG)/i) { |m| "<mark class='info'>#{m}</mark>" }
     line.strip
   end
@@ -54,11 +54,4 @@ end
 # Auto‑refresh endpoint (hit /health or / for periodic JS reload)
 get '/health' do
   { ok: true, time: Time.now.utc.iso8601 }.to_json
-end
-
-get '/debug' do
-  content_type :text
-  "LOG_PATH = #{LOG_PATH}\n" \
-  "File.exists?(LOG_PATH) = #{File.exist?(LOG_PATH).inspect}\n" \
-  "Dir.pwd = #{Dir.pwd}\n"
 end
