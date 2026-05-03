@@ -33,6 +33,8 @@ The key's randomart image is:
 
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFWhD78A9+4VyS2f9ls8qlcUJQUPRbA6vCwkepSkG7ps aws-ec2-polymarket-bot
 
+sudo dnf install -y git
+
 nano ~/.ssh/config
 
 Host github.com
@@ -44,13 +46,12 @@ Host github.com
 sudo yum update -y
 sudo yum install -y python3 python3-pip git tmux curl htop jq
 
-mkdir ~/polymarket-bot
-cd ~/polymarket-bot
-python3 -m venv venv
+mkdir ~/cryptomation-bot
+
+cd ~/cryptomation-aws
+git pull origin main
+
 source venv/bin/activate
 pip install --upgrade pip
 
-cd ~/polymarket-bot
-source venv/bin/activate
 pip install -r requirements.txt
-
