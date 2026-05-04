@@ -66,6 +66,7 @@ sudo systemctl enable redis6
 sudo systemctl start redis6
 sudo systemctl status redis6
 
+
 sudo dnf swap curl-minimal curl-full
 sudo dnf swap libcurl-minimal libcurl-full
 
