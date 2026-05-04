@@ -9,7 +9,7 @@ def connect_local_redis():
         host="127.0.0.1",
         port=6379,
         db=0,
-        password=None,
+        password="StrongPass",
         decode_responses=False,  # Keep bytes for exact copy
     )
 

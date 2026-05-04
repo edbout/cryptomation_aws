@@ -77,4 +77,16 @@ for i in {1..100}; do
 done > latencies.log
 
 
+Redis localy
 StrongPass
+
+
+Install it if needed: sudo dnf install tmux
+
+Start a session: tmux new -s bot
+
+Run your script inside: python main.py
+
+Detach: Press Ctrl+b then d.
+
+You can now safely disconnect. To check on it later, log back in and run: tmux attach -t bot
