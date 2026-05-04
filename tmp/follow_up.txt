@@ -12,3 +12,46 @@
 2026-05-04 07:39:50,792 [ERROR] price_tracker: ✗ ETHUSDT | record_signal | invalid price: 1.0
 2026-05-04 07:39:56,188 [ERROR] price_tracker: ✗ ETHUSDT | record_signal | invalid price: 1.0
 2026-05-04 07:39:59,797 [ERROR] price_tracker: ✗ BTCUSDT | record_signal | invalid price: 1.0
+
+
+2026-05-04 08:57:50,168 [INFO] lib.order_manager: 🟢 | BTCUSDT  | tm=2-170s | win_rate=87.2% | chg:+0.057% | Hist:0.8783 | Now:0.6200 | Edge:-29.4% (Need:- 14.6%)
+2026-05-04 08:57:50,168 [INFO] lib.order_manager: ✅ validate_adjust_price  BTCUSDT | Approved [default] | tm=2 | YES | price=0.62 | Edge:-29.4% vs need:-14.6%
+2026-05-04 08:57:50,194 [INFO] lib.order_manager: 💰 safe_place_order | Kelly size $8.30 (win_rate=87.2% price=0.6200 bankroll=$50 frac=0.25)
+2026-05-04 08:57:50,216 [INFO] lib.order_manager: 🔧 execute_order attempt 1/3 | FOK | BTCUSDT | price=0.6200 (mid=0.6250 slippage=-0.5%) | $8.30
+2026-05-04 08:57:50,619 [INFO] lib.order_manager: ⏳ exec_order BTCUSDT | escalating to tier 2/3 after FOK fail
+2026-05-04 08:57:50,640 [INFO] lib.order_manager: 🔧 execute_order attempt 2/3 | FAK | BTCUSDT | price=0.8900 (mid=0.8900 slippage=+0.5%) | $8.30
+2026-05-04 08:57:50,920 [INFO] lib.order_manager: ⏳ exec_order BTCUSDT | escalating to tier 3/3 after FAK fail
+2026-05-04 08:57:50,939 [INFO] lib.order_manager: 🔧 execute_order attempt 3/3 | FAK | BTCUSDT | price=0.9000 (mid=0.9050 slippage=+1.5%) | $8.30
+2026-05-04 08:57:51,248 [INFO] lib.order_manager: ✅ exec_order FAK BTCUSDT | YES | $8.30@0.620 → 1.1s
+2026-05-04 08:57:51,249 [INFO] lib.order_manager: ✅ exec_order FAK BTCUSDT | attempt 3 succeeded
+2026-05-04 08:57:51,250 [INFO] lib.order_manager: ✓ handle_order_success BTCUSDT | Scheduling 11 TP attempts every 5s (skipping first 10s, up to 60s, time left: 114s)
+2026-05-04 08:57:52,826 [INFO] price_tracker: ⏳ get_fairvalue_avg | ETHUSDT m2: 172s chg=+0.0687% | 15/20 matches (tw=15s pt=0.005)
+2026-05-04 08:58:00,373 [INFO] __main__: 🎯 Timer loop | Trading M3 at 08:58:00 | can_trade=True | dry_run=False
+2026-05-04 08:58:01,468 [INFO] lib.order_manager: ⏳ place_tp_orders  BTCUSDT | TP1 waiting | mid=0.955 < 0.960 | size 5 shares | [live:]
+2026-05-04 08:58:01,510 [INFO] lib.order_manager: ➖ Manage positions BTCUSDT | tm=2 | size=$8.30 | 0.900→0.955 | 🟢 +6.1% : $+0.46 | TP:25% | SL:15.0% | Max:+6.1%  | Trail:-inf%
+2026-05-04 08:58:04,745 [INFO] lib.order_manager: 🔴 | ETHUSDT  | tm=3-184s | win_rate=94.0% | chg:+0.069% | Hist:0.8368 | Now:0.8700 | Edge: +4.0% (Need:-  5.5%)
+2026-05-04 08:58:06,565 [INFO] price_tracker: ⏳ get_fairvalue_avg | SOLUSDT m3: 186s chg=+0.0826% | 7/15 matches (tw=15s pt=0.01)
+2026-05-04 08:58:06,568 [INFO] lib.order_manager: ➖ Manage positions BTCUSDT | tm=2 | size=$8.30 | 0.900→0.955 | 🟢 +6.1% : $+0.46 | TP:25% | SL:15.0% | Max:+6.1%  | Trail:-inf%
+2026-05-04 08:58:09,982 [INFO] lib.order_manager: 🔴 | ETHUSDT  | tm=3-189s | win_rate=94.0% | chg:+0.063% | Hist:0.8302 | Now:0.8800 | Edge: +6.0% (Need:-  5.5%)
+2026-05-04 08:58:11,503 [INFO] lib.order_manager: ➖ Manage positions BTCUSDT | tm=2 | size=$8.30 | 0.900→0.935 | 🟢 +3.9% : $+0.29 | TP:25% | SL:15.0% | Max:+6.1%  | Trail:-inf%
+2026-05-04 08:58:11,898 [INFO] price_tracker: ⏳ get_fairvalue_avg | SOLUSDT m3: 191s chg=+0.0826% | 7/15 matches (tw=15s pt=0.01)
+2026-05-04 08:58:12,660 [INFO] lib.order_manager: 🔴 | XRPUSDT  | tm=3-192s | win_rate=94.9% | chg:+0.043% | Hist:0.8011 | Now:0.8500 | Edge: +6.1% (Need:- 14.4%)
+2026-05-04 08:58:15,028 [INFO] lib.order_manager: 🟢 | ETHUSDT  | tm=3-194s | win_rate=94.0% | chg:+0.063% | Hist:0.8302 | Now:0.7600 | Edge: -8.5% (Need:-  5.5%)
+2026-05-04 08:58:15,028 [INFO] lib.order_manager: ✅ validate_adjust_price  ETHUSDT | Approved [default] | tm=3 | YES | price=0.76 | Edge:-8.5% vs need:-5.5%
+2026-05-04 08:58:15,049 [INFO] lib.order_manager: 💰 safe_place_order | Kelly size $9.39 (win_rate=94.0% price=0.7600 bankroll=$50 frac=0.25)
+2026-05-04 08:58:15,073 [INFO] lib.order_manager: 🔧 execute_order attempt 1/3 | FOK | ETHUSDT | price=0.7600 (mid=0.7650 slippage=-0.5%) | $9.39
+2026-05-04 08:58:15,637 [INFO] lib.order_manager: ⏳ exec_order ETHUSDT | escalating to tier 2/3 after FOK fail
+2026-05-04 08:58:15,661 [INFO] lib.order_manager: 🔧 execute_order attempt 2/3 | FAK | ETHUSDT | price=0.7000 (mid=0.7000 slippage=+0.5%) | $9.39
+2026-05-04 08:58:15,966 [INFO] lib.order_manager: ✅ exec_order FAK ETHUSDT | YES | $9.39@0.760 → 0.9s
+2026-05-04 08:58:15,968 [INFO] lib.order_manager: ✅ exec_order FAK ETHUSDT | attempt 2 succeeded
+2026-05-04 08:58:15,969 [INFO] lib.order_manager: ✓ handle_order_success ETHUSDT | Scheduling 11 TP attempts every 5s (skipping first 10s, up to 60s, time left: 90s)
+2026-05-04 08:58:16,502 [INFO] lib.order_manager: ➖ Manage positions BTCUSDT | tm=2 | size=$8.30 | 0.900→0.875 | 🔴 -2.8% : $-0.21 | TP:25% | SL:15.0% | Max:+6.1%  | Trail:-inf%
+2026-05-04 08:58:17,796 [INFO] price_tracker: ⏳ get_fairvalue_avg | SOLUSDT m3: 197s chg=+0.0826% | 9/15 matches (tw=15s pt=0.01)
+2026-05-04 08:58:18,158 [INFO] lib.order_manager: 🔴 | XRPUSDT  | tm=3-198s | win_rate=94.9% | chg:+0.043% | Hist:0.8011 | Now:0.8500 | Edge: +6.1% (Need:- 14.5%)
+2026-05-04 08:58:21,507 [INFO] lib.order_manager: ➖ Manage positions BTCUSDT | tm=2 | size=$8.30 | 0.900→0.625 | 🔴 -30.6% : $-2.28 | TP:25% | SL:15.0% | Max:+6.1%  | Trail:-inf%
+2026-05-04 08:58:21,507 [INFO] lib.order_manager: 🔴 Manage positions BTCUSDT SL HIT -15.0% | Closing btc-updown-5m-1777884900
+2026-05-04 08:58:21,641 [INFO] lib.order_manager: ℹ️ close_position_by_token BTCUSDT | Too small (4.2297) | 23938481
+2026-05-04 08:58:21,663 [INFO] lib.order_manager: 🧹 _dust_cleanup 23938481 | 4.2297 shares @ mid=0.5000 = $2.1149 notional
+2026-05-04 08:58:21,663 [INFO] lib.order_manager: 🧹 _dust_cleanup 23938481 | $2.1149 notional >= $1.0 — placing GTC limit SELL at 0.495
+2026-05-04 08:58:22,451 [INFO] lib.order_manager: ✅ _dust_cleanup 23938481 | GTC placed: 0xdf01efbea5ed1394333008df32a07b1ee53d0063034020c02c32bf60461e2907
+2026-05-04 08:58:22,453 [INFO] lib.order_manager: ✗ close_with_cleanup BTCUSDT | Close failed | Success: False

@@ -330,10 +330,10 @@ class OrderManager:
 
             if response and response.get("success"):
                 order_id = response.get("orderID", "unknown")
-                logger.info(f"✅ _dust_cleanup {token_id[-8:]} | GTC placed: {order_id}")
+                logger.info(f"✓ _dust_cleanup {token_id[-8:]} | GTC placed: {order_id}")
                 return True
 
-            logger.error(f"❌ _dust_cleanup {token_id[-8:]} | GTC failed: {response}")
+            logger.error(f"✗ _dust_cleanup {token_id[-8:]} | GTC failed: {response}")
             return False
 
         except Exception:
@@ -1835,18 +1835,18 @@ class OrderManager:
 
                 # Close triggers (in priority order)
                 if pnl_pct >= tp_pct:
-                    logger.info(f"🟢 Manage positions {asset} TP HIT {tp_pct}% | Closing {market_slug}")
+                    logger.info(f"🟢 Manage positions {asset} TP HIT {pnl_pct:.1f}% ({tp_pct:.1f}%) | Closing {market_slug}")
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key)
                     return
 
                 elif pnl_pct <= -sl_pct and -sl_pct <= -15:
-                    logger.info(f"🔴 Manage positions {asset} SL HIT {-sl_pct}% | Closing {market_slug}")
+                    logger.info(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% ({-sl_pct:.1f}%) | Closing {market_slug}")
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key)
                     return
 
                 elif max_pnl_pct > 15 and pnl_pct <= trailing_stop_pct:
                     logger.info(
-                        f"🟠 Manage positions {asset} TRAIL HIT peak={max_pnl_pct:.1f}% stop={trailing_stop_pct:.1f}% | Closing {market_slug}"
+                        f"🟠 Manage positions {asset} TRAIL HIT pnl={pnl_pct:.1f}% peak={max_pnl_pct:.1f}% stop={trailing_stop_pct:.1f}% | Closing {market_slug}"
                     )
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key)
                     return

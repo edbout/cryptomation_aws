@@ -38,24 +38,9 @@
       max-height: calc(100vh - 120px);
       overflow-y: auto;
     }
-    mark.info {
-        background: #003300;
-        color: #6ddb6d;
-        padding: 0 2px;
-    }
-    mark.err {
-        background: #400;
-        color: #f00;
-        font-weight: bold;
-        padding: 0 2px;
-    }
-    /* Add this new block */
-    mark.warn {
-        background: #440;
-        color: #ff0;
-        font-weight: bold;
-        padding: 0 2px;
-    }
+    mark.info { background: #003300; color: #6ddb6d; padding: 0 2px; }
+    mark.err { background: #400; color: #f00; font-weight: bold; padding: 0 2px; }
+    mark.warn { background: #440; color: #ff0; font-weight: bold; padding: 0 2px; }
     footer {
       margin-top: 10px;
       font-size: 12px;
@@ -64,26 +49,42 @@
   </style>
 </head>
 <body>
-  <header><%= title %>
-    <small>Path: <%= log_path %> | Time: <%= time %></small>
+  <header id="header"><%= title %>
+    <small id="timestamp">Path: <%= log_path %> | Time: <%= time %></small>
   </header>
 
   <main>
-    <pre><%= log_lines.join("\n") %></pre>
+    <pre id="log-content"><%= log_lines.join("\n") %></pre>
   </main>
 
-  <footer>Auto‑refreshing every 5 seconds. Press F5 to refresh manually.</footer>
+  <footer>🔄 Auto‑refreshing logs every 5 seconds.</footer>
 
   <script>
-    setInterval(() => {
-      fetch('/health')
-        .then(r => r.json())
-        .then(json => {
-          document.querySelector('small').textContent =
-            `Path: <%= log_path %> | Time: ${json.time}`;
+    function updatePage() {
+      fetch('/logs')  // Same endpoint that renders this page
+        .then(r => r.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
+          
+          // Update header
+          document.getElementById('header').innerHTML = 
+            doc.querySelector('header').innerHTML;
+          
+          // Update log content only
+          document.getElementById('log-content').textContent = 
+            doc.querySelector('pre').textContent;
         })
-        .catch(() => {});
-    }, 5000);
+        .catch(err => {
+          console.error('Refresh failed:', err);
+        });
+    }
+
+    // Update every 5 seconds
+    setInterval(updatePage, 5000);
+    
+    // Initial load
+    updatePage();
   </script>
 </body>
 </html>

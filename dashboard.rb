@@ -38,7 +38,7 @@ def styled_log_lines(lines)
 end
 
 get '/' do
-  lines = read_log_lines(2000)
+  lines = read_log_lines(1000)
   highlighted = styled_log_lines(lines)
 
   content_type :html
