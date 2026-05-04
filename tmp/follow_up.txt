@@ -55,3 +55,28 @@
 2026-05-04 08:58:21,663 [INFO] lib.order_manager: 🧹 _dust_cleanup 23938481 | $2.1149 notional >= $1.0 — placing GTC limit SELL at 0.495
 2026-05-04 08:58:22,451 [INFO] lib.order_manager: ✅ _dust_cleanup 23938481 | GTC placed: 0xdf01efbea5ed1394333008df32a07b1ee53d0063034020c02c32bf60461e2907
 2026-05-04 08:58:22,453 [INFO] lib.order_manager: ✗ close_with_cleanup BTCUSDT | Close failed | Success: False
+
+
+2026-05-04 10:40:40,413 [INFO] lib.order_manager: ✅ exec_order FAK BTCUSDT | YES | $6.83@0.440 → 0.7s
+2026-05-04 10:40:40,413 [INFO] lib.order_manager: ✅ exec_order FAK BTCUSDT | attempt 2 succeeded
+2026-05-04 10:40:40,415 [INFO] lib.order_manager: ✓ handle_order_success BTCUSDT | Scheduling 11 TP attempts every 5s (skipping first 10s, up to 60s, time left: 245s)
+2026-05-04 10:40:41,237 [INFO] lib.order_manager: 🟡 | ETHUSDT  | tm=0- 41s | win_rate=72.7% | chg:+0.041% | Hist:0.7058 | Now:0.6400 | Edge: -9.3% (Need:- 10.4%)
+2026-05-04 10:40:45,083 [INFO] lib.order_manager: 🔴 | XRPUSDT  | tm=0- 45s | win_rate=73.9% | chg:+0.043% | Hist:0.5480 | Now:0.7300 | Edge:+33.2% (Need:- 12.4%)
+2026-05-04 10:40:50,615 [INFO] lib.order_manager: 🔴 | XRPUSDT  | tm=0- 50s | win_rate=73.9% | chg:+0.036% | Hist:0.5466 | Now:0.7600 | Edge:+39.0% (Need:- 12.6%)
+2026-05-04 10:40:50,616 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
+2026-05-04 10:40:52,783 [INFO] lib.order_manager: ✓ exchange_order_outcome ETHUSDT | BUY | O:2341.9400→C:2342.3600 | +0.02% (+0.420)
+2026-05-04 10:40:52,827 [INFO] lib.order_manager: ✓ polymarket_order_outcome ETHUSDT | eth-updown-5m-1777890900 | YES→NO | price=0.610→0.270 | pnl=-0.3400 (-55.7%)
+2026-05-04 10:40:55,460 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
+2026-05-04 10:41:00,354 [INFO] __main__: 🎯 Timer loop | Trading M1 at 10:41:00 | can_trade=True | dry_run=False
+2026-05-04 10:41:01,104 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
+2026-05-04 10:41:01,950 [INFO] __main__: ⏱️ handle_next_markets_approvals | Approvals batch (10 tasks) → 1529.8ms
+2026-05-04 10:41:01,950 [INFO] __main__: ⏱️ handle_next_markets_approvals | Approvals: 10/10 success (100%)
+2026-05-04 10:41:01,950 [INFO] __main__: ⏱️ handle_next_markets_approvals | Finished 1596.4ms (10 approvals)
+2026-05-04 10:41:05,466 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
+2026-05-04 10:41:10,555 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
+2026-05-04 10:41:15,460 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
+2026-05-04 10:41:20,556 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
+2026-05-04 10:41:25,457 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
+2026-05-04 10:41:30,553 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
+2026-05-04 10:41:35,458 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
+2026-05-04 10:41:40,573 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200

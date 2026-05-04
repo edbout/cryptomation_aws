@@ -1228,8 +1228,9 @@ class OrderManager:
             
             tp_price_threshold = min(order_price * 1.18, 0.96)
             tp1_size = max(5.0, round(position_size * 0.5, 0))
-
-            # Midpoint check
+            if tp_price_threshold >= Config.PRICE_MAX:
+                tp1_size = position_size  # If threshold is unrealistic, just place a full TP instead of half
+                
             try:
                 price_resp = self.client.get_midpoint(token_id)
                 current_mid = float(price_resp.get("mid", 0))
