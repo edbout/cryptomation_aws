@@ -57,12 +57,15 @@
     <pre id="log-content"><%= log_lines.join("\n") %></pre>
   </main>
 
-  <footer>🔄 Auto‑refreshing logs every 5 seconds.</footer>
+  <footer>🔄 Auto‑refreshing logs every 5 seconds. Always scrolls to bottom.</footer>
 
   <script>
     function updatePage() {
-      fetch('/logs')  // Same endpoint that renders this page
-        .then(r => r.text())
+      fetch(location.pathname)  // Use current page URL exactly
+        .then(r => {
+          if (!r.ok) throw new Error('Fetch failed');
+          return r.text();
+        })
         .then(html => {
           const parser = new DOMParser();
           const doc = parser.parseFromString(html, 'text/html');
@@ -71,20 +74,30 @@
           document.getElementById('header').innerHTML = 
             doc.querySelector('header').innerHTML;
           
-          // Update log content only
-          document.getElementById('log-content').textContent = 
-            doc.querySelector('pre').textContent;
+          // Update log content
+          const logElement = document.getElementById('log-content');
+          const newContent = doc.querySelector('pre').textContent;
+          
+          logElement.textContent = newContent;
+          
+          // Scroll to bottom after update
+          logElement.scrollTop = logElement.scrollHeight;
+          
+          console.log('✅ Logs updated & scrolled to bottom');
         })
         .catch(err => {
-          console.error('Refresh failed:', err);
+          console.error('❌ Refresh failed:', err);
         });
     }
 
     // Update every 5 seconds
     setInterval(updatePage, 5000);
     
-    // Initial load
-    updatePage();
+    // Initial scroll to bottom
+    window.addEventListener('load', () => {
+      document.getElementById('log-content').scrollTop = 
+        document.getElementById('log-content').scrollHeight;
+    });
   </script>
 </body>
 </html>
