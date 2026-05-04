@@ -822,8 +822,8 @@ class OrderManager:
                     return None
                 
                 price = float(price_response['mid'])
-                if price <= 0:
-                    logger.warning(f"✗ safe_place_order | no price for {asset}")
+                if price <= 0 or price >= 1:
+                    logger.warning(f"✗ safe_place_order | invalid price {price} for {asset}")
                     return None
 
                 logger.debug(f"✓ safe_place_order | retrieved price for {asset} #{token_id}: {price}")
@@ -1077,7 +1077,7 @@ class OrderManager:
                     did_fail = True
                 elif not is_retryable_error(error_msg):
                     logger.info(
-                        f"⚠️  exec_order {label} {asset} | non‑retryable exception "
+                        f"⚠️ exec_order {label} {asset} | non‑retryable exception "
                         f"{attempt+1}/{max_retries} ({exec_time:.1f}s): {error_msg}"
                     )
                     did_fail = True
@@ -1776,7 +1776,7 @@ class OrderManager:
                     return
 
                 # Dynamic TP/SL: TP grows with trigger_minute, SL is 60% of TP 
-                tp_pct = min(trigger_minute * 5 + 15, 0.35) * 0.01   # 20–35%, scaled to 0.x
+                tp_pct = min(trigger_minute * 5 + 15, 35)            # 15–35%, scaled to 0.x
                 sl_pct = max(tp_pct * 0.60, 0.10)                    # 60% of TP, but at least 10%
 
                 # Trailing stop logic

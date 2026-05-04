@@ -1,0 +1,14 @@
+2026-05-04 07:39:35,972 [INFO] lib.order_manager: 🔴 | BTCUSDT  | tm=4-275s | win_rate=97.5% | chg:-0.067% | Hist:0.6085 | Now:0.8600 | Edge:+41.3% (Need:- 25.0%)
+2026-05-04 07:39:35,973 [INFO] lib.order_manager: 🟢 validate_adjust_price | BTCUSDT closing zone s=275 — price=0.860 confidence=-0.067 → ALLOW
+2026-05-04 07:39:35,974 [INFO] lib.order_manager: ✅ validate_adjust_price  BTCUSDT | Approved [default] | tm=4 | NO | price=0.86 | Edge:+41.3% vs need:-25.0%
+2026-05-04 07:39:35,995 [INFO] lib.order_manager: 💰 safe_place_order | Kelly size $10.00 (win_rate=97.5% price=0.8600 bankroll=$50 frac=0.25)
+2026-05-04 07:39:36,019 [INFO] lib.order_manager: 🔧 execute_order attempt 1/3 | FOK | BTCUSDT | price=0.8600 (mid=0.8650 slippage=-0.5%) | $10.00
+2026-05-04 07:39:36,363 [INFO] lib.order_manager: ⏳ exec_order BTCUSDT | escalating to tier 2/3 after FOK fail
+2026-05-04 07:39:36,386 [INFO] lib.order_manager: 🔧 execute_order attempt 2/3 | FAK | BTCUSDT | price=0.8700 (mid=0.8650 slippage=+0.5%) | $10.00
+2026-05-04 07:39:36,414 [INFO] lib.order_manager: ⚠️  exec_order FAK BTCUSDT | non‑retryable exception 2/3 (0.4s): invalid amounts, the market buy orders maker amount supports a max accuracy of 2
+2026-05-04 07:39:36,414 [INFO] lib.order_manager: ✗ exec_order FAK BTCUSDT | attempt 2 failed (non‑retryable)
+2026-05-04 07:39:40,487 [ERROR] price_tracker: ✗ ETHUSDT | record_signal | invalid price: 1.0
+2026-05-04 07:39:45,724 [ERROR] price_tracker: ✗ ETHUSDT | record_signal | invalid price: 1.0
+2026-05-04 07:39:50,792 [ERROR] price_tracker: ✗ ETHUSDT | record_signal | invalid price: 1.0
+2026-05-04 07:39:56,188 [ERROR] price_tracker: ✗ ETHUSDT | record_signal | invalid price: 1.0
+2026-05-04 07:39:59,797 [ERROR] price_tracker: ✗ BTCUSDT | record_signal | invalid price: 1.0
