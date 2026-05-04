@@ -1839,8 +1839,8 @@ class OrderManager:
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key)
                     return
 
-                elif pnl_pct <= -sl_pct and pnl_pct <= -15:
-                    logger.info(f"🔴 Manage positions {asset} SL HIT {sl_pct}% | Closing {market_slug}")
+                elif pnl_pct <= -sl_pct and -sl_pct <= -15:
+                    logger.info(f"🔴 Manage positions {asset} SL HIT {-sl_pct}% | Closing {market_slug}")
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key)
                     return
 
