@@ -1,4 +1,5 @@
 ssh -i "ireland.pem" ec2-user@ec2-54-229-189-249.eu-west-1.compute.amazonaws.com
+source ./venv/bin/activate
 
 NAME="Amazon Linux"
 VERSION="2023"

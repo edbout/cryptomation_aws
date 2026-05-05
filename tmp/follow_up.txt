@@ -80,3 +80,7 @@
 2026-05-04 10:41:30,553 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
 2026-05-04 10:41:35,458 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
 2026-05-04 10:41:40,573 [INFO] lib.order_manager: ℹ️ place_tp_orders  BTCUSDT | No position found for btc-updown-5m-1777891200
+
+so back to my polymarket trading bot, i am now working on a new git repo https://github.com/edbout/cryptomation_aws
+hosting no longer on heroku but on a AWS linux server hosted in Dublin, in my code i have integrated a bit of ruby to show me the logs on a page http://54.229.189.249:4567 ( unsecure is fine for now,  ill configure firewall soon ), running my script for a few days and i am loosing money, can you go over my code, describe again what it's doing and usggets improve ments 
+code in C:\Users\EdwinBout\Documents\Prive\Cryptomation aws

@@ -1,102 +1,101 @@
-import time
-from config import RedisCache
 import redis
+from config import RedisCache
+
+LOCAL_HOST = "127.0.0.1"
+LOCAL_PORT = 6379
+LOCAL_DB = 0
+LOCAL_PASSWORD = None
 
 
 def connect_local_redis():
-    # Adjust host/port/password if yours is different
     return redis.Redis(
-        host="127.0.0.1",
-        port=6379,
-        db=0,
-        password="StrongPass",
-        decode_responses=False,  # Keep bytes for exact copy
+        host=LOCAL_HOST,
+        port=LOCAL_PORT,
+        db=LOCAL_DB,
+        password=LOCAL_PASSWORD,
+        decode_responses=False,
     )
 
 
 def sync_cloud_to_local():
-    cloud = RedisCache()  # your cloud Redis
+    cloud = RedisCache()
     local = connect_local_redis()
 
     print("FLUSHING local Redis...")
-    local.flushdb()  # clear local before copy
+    local.flushdb()
     print("Local Redis flushed.")
 
     print("Scanning cloud Redis keys...")
-    count = 0
     cursor = 0
+    count = 0
 
     while True:
         cursor, keys = cloud.scan(cursor=cursor, count=1000)
-        if not keys:
-            break
+        if keys:
+            pipe = local.pipeline(transaction=False)
 
-        pipe = local.pipeline(transaction=False)
+            for key in keys:
+                t = cloud.type(key)
 
-        for key in keys:
-            # Get type and value
-            t = cloud.type(key)
-            if t == b"string":
-                value = cloud.get(key)
-                ttl = cloud.ttl(key)
-                if ttl > 0:
-                    pipe.setex(key, ttl, value)
+                if t == b"string":
+                    value = cloud.get(key)
+                    ttl = cloud.ttl(key)
+                    if ttl and ttl > 0:
+                        pipe.setex(key, ttl, value)
+                    else:
+                        pipe.set(key, value)
+
+                elif t == b"list":
+                    value = cloud.lrange(key, 0, -1)
+                    pipe.delete(key)
+                    if value:
+                        pipe.rpush(key, *value)
+                    ttl = cloud.ttl(key)
+                    if ttl and ttl > 0:
+                        pipe.expire(key, ttl)
+
+                elif t == b"set":
+                    value = cloud.smembers(key)
+                    pipe.delete(key)
+                    if value:
+                        pipe.sadd(key, *value)
+                    ttl = cloud.ttl(key)
+                    if ttl and ttl > 0:
+                        pipe.expire(key, ttl)
+
+                elif t == b"zset":
+                    value = cloud.zrange(key, 0, -1, withscores=True)
+                    pipe.delete(key)
+                    if value:
+                        mapping = {member: score for member, score in value}
+                        pipe.zadd(key, mapping)
+                    ttl = cloud.ttl(key)
+                    if ttl and ttl > 0:
+                        pipe.expire(key, ttl)
+
+                elif t == b"hash":
+                    value = cloud.hgetall(key)
+                    pipe.delete(key)
+                    if value:
+                        pipe.hset(key, mapping=value)
+                    ttl = cloud.ttl(key)
+                    if ttl and ttl > 0:
+                        pipe.expire(key, ttl)
+
                 else:
-                    pipe.set(key, value)
-            elif t == b"list":
-                value = cloud.lrange(key, 0, -1)
-                pipe.delete(key)
-                if value:
-                    pipe.rpush(key, *value)
-                ttl = cloud.ttl(key)
-                if ttl > 0:
-                    pipe.expire(key, ttl)
+                    print("Unhandled type for key", key, "type:", t)
 
-            elif t == b"set":
-                value = cloud.smembers(key)
-                pipe.delete(key)
-                if value:
-                    pipe.sadd(key, *value)
-                ttl = cloud.ttl(key)
-                if ttl > 0:
-                    pipe.expire(key, ttl)
+                count += 1
+                if count % 1000 == 0:
+                    print(f"Synced {count} keys...")
 
-            elif t == b"zset":
-                # zset: list of (member, score)
-                value = cloud.zrange(key, 0, -1, withscores=True)
-                pipe.delete(key)
-                if value:
-                    for member, score in value:
-                        pipe.zadd(key, {member: score})
-                ttl = cloud.ttl(key)
-                if ttl > 0:
-                    pipe.expire(key, ttl)
-
-            elif t == b"hash":
-                value = cloud.hgetall(key)
-                pipe.delete(key)
-                if value:
-                    pipe.hset(key, mapping=value)
-                ttl = cloud.ttl(key)
-                if ttl > 0:
-                    pipe.expire(key, ttl)
-
-            elif t in (b"none", b"stream"):
-                # ignore deleted or stream types for now
-                pass
-            else:
-                print("Unhandled type for key", key, "type:", t)
-
-            count += 1
-            if count % 1000 == 0:
-                print(f"Synced {count} keys...")
-
-        pipe.execute()
+            pipe.execute()
 
         if cursor == 0:
             break
 
     print(f"Sync complete. Copied {count} keys from cloud Redis to local Redis.")
+    print("Local DBSIZE:", local.dbsize())
 
 
 if __name__ == "__main__":

@@ -375,7 +375,7 @@ class OrderManager:
         positions = await asyncio.wait_for(self.get_active_positions(), timeout=10.0)
         return next((p for p in positions if p.get("token_id") == token_id), None)
    
-    async def close_position_by_token(self, asset: str, token_id: str, size: float, cooldown_key: str) -> bool:
+    async def close_position_by_token(self, asset: str, token_id: str, size: float, cooldown_key: str, reason: str = "manual") -> bool:
         """Safely close position by token_id. Returns True if fully or partially closed.
 
         Close sequence:
@@ -425,8 +425,40 @@ class OrderManager:
             return any(msg in error_msg.lower() for msg in non_retryable)
 
         if Config.DRY_RUN:
-            logger.debug(f"🧪 close_position_by_token {asset} | DRY_RUN skip | {token_id[-8:]}")
-            return False
+            exit_price = 0.0
+            pnl_pct_dry = 0.0
+            pnl_usd_dry = 0.0
+            try:
+                mid_resp = await asyncio.to_thread(self.client.get_midpoint, token_id)
+                exit_price = float(mid_resp.get("mid", 0)) if isinstance(mid_resp, dict) else 0.0
+            except Exception:
+                pass
+            order_dry = await self.get_order_from_redis_by_token(token_id)
+            if order_dry and exit_price > 0:
+                entry_dry  = float(order_dry.get("price", exit_price))
+                size_dry   = abs(float(order_dry.get("size", size)))
+                if entry_dry > 0:
+                    pnl_pct_dry = (exit_price - entry_dry) / entry_dry * 100
+                    pnl_usd_dry = pnl_pct_dry / 100 * size_dry * entry_dry
+                order_id_dry = order_dry.get("order_id", "")
+                if order_id_dry:
+                    try:
+                        self.redis.hset(f"dryrun:trade:{order_id_dry}", mapping={
+                            "status":     "closed",
+                            "exit_price": str(round(exit_price, 4)),
+                            "exit_time":  get_utc_now().isoformat(),
+                            "exit_reason": reason,
+                            "pnl_pct":    str(round(pnl_pct_dry, 2)),
+                            "pnl_usd":    str(round(pnl_usd_dry, 4)),
+                        })
+                    except Exception:
+                        pass
+            logger.info(
+                f"🧪 DRY close {asset} | reason={reason} | exit={exit_price:.3f} | "
+                f"pnl={pnl_pct_dry:+.1f}% (${pnl_usd_dry:+.2f}) | {token_id[-8:]}"
+            )
+            self.redis.setex(cooldown_key, 300, "1")
+            return True
 
         try:
             pos = await self._wait_for_active_asset_lock_and_get_position(asset, token_id)
@@ -872,18 +904,16 @@ class OrderManager:
                 
                 # Execute order based on config
                 if Config.DRY_RUN:
-                    logger.info("🧪 DRY %s %s (open: %.2f)", token, asset, order_price)
+                    dry_order_id = f"dry_{int(time.time())}_{token_id[-8:]}"
+                    logger.info("🧪 DRY %s %s @ %.4f size=%.2f id=%s", token, asset, order_price, size, dry_order_id)
                     response = {
                         "success": True,
-                        "orderID": token_id,  
-                        "market_slug": market_slug,
-                        "token_id": token_id,
-                        "asset": asset,
-                        "side": token,
-                        "size": size,
-                        "makingAmount": size,
-                        "takingAmount": size,
-                        "price": order_price
+                        "result": {
+                            "orderID": dry_order_id,
+                            "status": "matched",
+                            "makingAmount": str(round(size, 4)),
+                            "takingAmount": str(round(size * order_price, 4)),
+                        },
                     }
 
                 else:                  
@@ -1186,12 +1216,20 @@ class OrderManager:
             return
 
         try:
-            pos = await self._wait_for_active_asset_lock_and_get_position(asset, token_id)
-            if not pos:
-                logger.info(f"ℹ️ place_tp_orders {asset_label:>8} | No position found for {market_slug}")
-                return
+            if Config.DRY_RUN:
+                # No real position in dry-run — use stored order size so manage_positions still runs
+                order_dry = await self.get_order_from_redis_by_token(token_id)
+                if not order_dry:
+                    logger.debug(f"🧪 place_tp_orders DRY_RUN | No stored order for {token_id[-8:]}")
+                    return
+                position_size = abs(float(order_dry.get("size", size)))
+            else:
+                pos = await self._wait_for_active_asset_lock_and_get_position(asset, token_id)
+                if not pos:
+                    logger.info(f"ℹ️ place_tp_orders {asset_label:>8} | No position found for {market_slug}")
+                    return
+                position_size = float(pos.get("size", size))
 
-            position_size = float(pos.get("size", size))
             if position_size < 5.0:
                 logger.info(
                     f"ℹ️ place_tp_orders {asset_label:>8} | Position too small for TP orders: {position_size:.1f}; "
@@ -1246,7 +1284,7 @@ class OrderManager:
                     f"mid={current_mid:.3f} >= {tp_price_threshold:.3f} | "
                     f"closing {tp1_size:.0f} shares"
                 )
-                await self.close_position_by_token(asset, token_id, tp1_size, cooldown_key_tp)
+                await self.close_position_by_token(asset, token_id, tp1_size, cooldown_key_tp, reason="tp")
                 return
 
             # Otherwise, place a TP limit
@@ -1305,8 +1343,8 @@ class OrderManager:
           - Volatility scaling: high price_std asset → wider natural spread, need more edge
         """
         
-        # Minute stats check and track stats
-        stats = await self.update_price(asset, order_price, confidence, trigger_minute)
+        # Read stats without recording — signal only written after all gates pass (fix: was corrupting win-rate stats)
+        stats = self.tracker.minute_stats(asset, trigger_minute)
 
         if order_price > Config.PRICE_MAX:
             logger.debug("✗ validate_adjust_price %-8s | tm=%d | order_price=%.4f > max=%.4f | skipped", 
@@ -1480,27 +1518,20 @@ class OrderManager:
             edge_pct, required_edge
         )
 
-        # allow aggressive late‑entry only if price < 0.9 and high‑confidence
-        if candle_seconds > 270:
-            if  order_price >= Config.PRICE_MAX or abs(confidence) <= 0.05:
-                logger.debug(
-                    f"⏳ validate_adjust_price | {asset} closing zone s={candle_seconds} — price={order_price:.3f} "
-                    f"confidence={confidence:.3f} → skip (no edge)"
-                )
-                return None
-            else:
-                logger.info(
-                    f"🟢 validate_adjust_price | {asset} closing zone s={candle_seconds} — price={order_price:.3f} "
-                    f"confidence={confidence:.3f} → ALLOW"
-                )
-                # Let it continue to CLOB + order placement
-        elif edge_pct > -required_edge:
+        # Edge check applies to ALL windows including 270-285s late entries.
+        # time_multiplier is ~1.49x at 280s so late trades naturally need stronger edge.
+        if edge_pct > -required_edge:
             return None
-        
+
         logger.info(
             f"✅ validate_adjust_price {asset:>8} | Approved [{path_tag}] | tm={trigger_minute} | "
             f"{token} | price={order_price} | Edge:{edge_pct:+.1f}% vs need:-{required_edge:.1f}%"
         )
+        # Record signal only after all gates have passed — keeps prices:signals clean for accurate win-rate stats
+        try:
+            await asyncio.to_thread(self.tracker.record_signal, asset, order_price, confidence, trigger_minute)
+        except Exception:
+            pass
         return order_price
 
     async def store_order_permanent(
@@ -1572,6 +1603,36 @@ class OrderManager:
         except Exception as e:
             logger.error(f"store_order_permanent | Store order exception: {type(e).__name__}: {e}", exc_info=True)
             return
+
+        # Dry-run performance tracking — written unconditionally so the dashboard can query results later.
+        # Keys: dryrun:trade:{order_id}  (hash, 7d TTL)
+        #       dryrun:daily:{YYYY-MM-DD} (sorted set of order_ids, 14d TTL)
+        if Config.DRY_RUN:
+            tp_price_track = round(float(price) + (1.0 - float(price)) * 0.50, 4)
+            sl_pct_track   = min(trigger_minute * 3 + 10, 22)
+            dry_key = f"dryrun:trade:{order_id}"
+            today   = datetime.now(UTC).strftime("%Y-%m-%d")
+            try:
+                self.redis.hset(dry_key, mapping={
+                    "order_id":        order_id,
+                    "status":          "open",
+                    "asset":           asset,
+                    "side":            side,
+                    "entry_price":     str(price),
+                    "kelly_size":      str(size),
+                    "trigger_minute":  str(trigger_minute),
+                    "market_slug":     market_slug,
+                    "token_id":        token_id,
+                    "tp_price_target": str(tp_price_track),
+                    "sl_pct":          str(sl_pct_track),
+                    "entry_time":      datetime.now(UTC).isoformat(),
+                })
+                self.redis.expire(dry_key, 86400 * 7)
+                self.redis.zadd(f"dryrun:daily:{today}", {order_id: time.time()})
+                self.redis.expire(f"dryrun:daily:{today}", 86400 * 14)
+                logger.debug(f"🧪 dryrun:trade:{order_id[:12]} stored | tp={tp_price_track:.4f} sl={sl_pct_track}%")
+            except Exception as _e:
+                logger.warning(f"🧪 dryrun tracking write failed: {_e}")
 
         # Schedule outcome fetches OUTSIDE try/except so Redis errors can't prevent them
         delay = (5 - (datetime.now().minute % 5)) * 60
@@ -1776,9 +1837,10 @@ class OrderManager:
                     logger.error(f"✗ Manage positions | {market_slug} | no price for {asset} {token_id[:8]}")
                     return
 
-                # Dynamic TP/SL: TP grows with trigger_minute, SL is 60% of TP 
-                tp_pct = min(trigger_minute * 5 + 15, 35)            # 15–35%, scaled to 0.x
-                sl_pct = max(tp_pct * 0.60, 0.10)                    # 60% of TP, but at least 10%
+                # TP: capture 50% of remaining distance to 1.0 — avoids impossible %-of-entry targets for high-price entries
+                tp_price_target = min(entry_price + (1.0 - entry_price) * 0.50, 0.97)
+                # SL: absolute % loss, grows slightly deeper into candle (10–22%)
+                sl_pct = min(trigger_minute * 3 + 10, 22)
 
                 # Trailing stop logic
                 max_key = f"max_pnl:{token_id}"
@@ -1798,7 +1860,7 @@ class OrderManager:
                     f"➖ Manage positions {asset} | tm={trigger_minute} | "
                     f"size=${size:.2f} | {entry_price:.3f}→{current_price:.3f} | "
                     f"{'🟢' if pnl_pct > 0 else '🔴'} {pnl_pct:+.1f}% : ${pnl_usd:+.2f} | "
-                    f"TP:{tp_pct}% | SL:{sl_pct}% | Max:{max_pnl_pct:+.1f}%  | Trail:{trailing_stop_pct:+.1f}%"
+                    f"TP:{tp_price_target:.3f} | SL:{sl_pct}% | Max:{max_pnl_pct:+.1f}%  | Trail:{trailing_stop_pct:+.1f}%"
                 )
 
                 # ── POST-ENTRY COUNTER-SIGNAL CHECK ─────────────────────────
@@ -1829,36 +1891,36 @@ class OrderManager:
                                     f"🔁 Manage positions {asset} | COUNTER-SIGNAL | "
                                     f"pct={pct:+.2f}% OBI={obi:+.3f} | closing early"
                                 )
-                                await self._close_with_cleanup(asset, token_id, size, cooldown_key)
+                                await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="counter_signal")
                                 return
                 except Exception as cs_err:
                     logger.debug(f"⚠️ Manage positions {asset} | counter-signal check failed: {cs_err}")
 
                 # Close triggers (in priority order)
-                if pnl_pct >= tp_pct:
-                    logger.info(f"🟢 Manage positions {asset} TP HIT {pnl_pct:.1f}% ({tp_pct:.1f}%) | Closing {market_slug}")
-                    await self._close_with_cleanup(asset, token_id, size, cooldown_key)
+                if current_price >= tp_price_target:
+                    logger.info(f"🟢 Manage positions {asset} TP HIT price={current_price:.3f} >= {tp_price_target:.3f} | Closing {market_slug}")
+                    await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="tp")
                     return
 
-                elif pnl_pct <= -sl_pct and -sl_pct <= -15:
-                    logger.info(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% ({-sl_pct:.1f}%) | Closing {market_slug}")
-                    await self._close_with_cleanup(asset, token_id, size, cooldown_key)
+                elif pnl_pct <= -sl_pct:
+                    logger.info(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (<= -{sl_pct:.1f}%) | Closing {market_slug}")
+                    await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="sl")
                     return
 
                 elif max_pnl_pct > 15 and pnl_pct <= trailing_stop_pct:
                     logger.info(
                         f"🟠 Manage positions {asset} TRAIL HIT pnl={pnl_pct:.1f}% peak={max_pnl_pct:.1f}% stop={trailing_stop_pct:.1f}% | Closing {market_slug}"
                     )
-                    await self._close_with_cleanup(asset, token_id, size, cooldown_key)
+                    await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="trail")
                     return
 
         except Exception as e:
             logger.error(f"💥 Manage_positions | {market_slug} | {e}", exc_info=True)
 
-    async def _close_with_cleanup(self, asset: str, token_id: str, size: float, cooldown_key: str) -> None:
-        close_success = False        
+    async def _close_with_cleanup(self, asset: str, token_id: str, size: float, cooldown_key: str, reason: str = "manual") -> None:
+        close_success = False
         try:
-            close_success = await self.close_position_by_token(asset, token_id, size, cooldown_key)
+            close_success = await self.close_position_by_token(asset, token_id, size, cooldown_key, reason)
             if close_success:
                 logger.info(f"✓ close_with_cleanup {asset} | Close success | Success: {close_success}")
                 if cooldown_key:
@@ -1869,5 +1931,5 @@ class OrderManager:
         except Exception as e:
             logger.error(f"✗ close_with_cleanup {asset} | Close failed | {e}")
         
-        finally:    
-            close_success
+        finally:
+            pass

@@ -340,6 +340,8 @@ class BybitManager:
         self._last_trigger_ts: Dict[str, float] = {sym: 0.0 for sym in Config.BYBIT_SYMBOLS}
         # Funding rate per symbol (updated from ticker stream)
         self._funding_rate: Dict[str, float] = {sym: 0.0 for sym in Config.BYBIT_SYMBOLS}
+        # Last seen volume24h per symbol — used to compute tick-by-tick volume deltas
+        self._last_volume24h: Dict[str, float] = {}
         # Liquidation events: sym → deque of (timestamp, side, usd_value)
         self._liq_events: Dict[str, deque] = {sym: deque() for sym in Config.BYBIT_SYMBOLS}
         # BTC momentum flag for cross-asset lead-lag
@@ -476,7 +478,14 @@ class BybitManager:
             self._last_ticker_ts[sym] = now_ts
 
             volume24h = float(data.get("volume24h", 0) or 0)
-            volume = volume24h * 0.01  # 1% sample as volume proxy
+            if sym not in self._last_volume24h:
+                # First tick: initialise without contributing volume to avoid a huge spurious spike
+                self._last_volume24h[sym] = volume24h
+                volume = 0.0
+            else:
+                prev_vol24h = self._last_volume24h[sym]
+                volume = max(volume24h - prev_vol24h, 0.0)  # negative = 24h window rolled, treat as 0
+                self._last_volume24h[sym] = volume24h
 
             funding_str = data.get("fundingRate")
             if funding_str:
@@ -491,7 +500,7 @@ class BybitManager:
 
             candle_tracker.on_stream_tick(sym, volume, now_ts)
             pct_change = candle_tracker.update_from_bybit(sym, price, volume, now_ts)
-            high_vol = candle_tracker.has_high_volume_prev_minute(sym, multiplier=1) if Config.REQUIRE_VOL else True
+            high_vol = candle_tracker.has_high_volume_prev_minute(sym, multiplier=1.25) if Config.REQUIRE_VOL else True
 
             # Polymarket fair-value recording — record_fairvalue's snap-to-mark
             # logic (±7s of 30s marks) acts as its own throttle; safe to call every tick.

@@ -57,7 +57,7 @@
     <pre id="log-content"><%= log_lines.join("\n") %></pre>
   </main>
 
-  <footer>🔄 Auto‑refreshing logs every 5 seconds. Always scrolls to bottom.</footer>
+  <footer>🔄 Auto‑refreshing logs every 5 seconds.</footer>
 
   <script>
     function updatePage() {
@@ -81,9 +81,9 @@
           logElement.textContent = newContent;
           
           // Scroll to bottom after update
-          logElement.scrollTop = logElement.scrollHeight;
+          //logElement.scrollTop = logElement.scrollHeight;
           
-          console.log('✅ Logs updated & scrolled to bottom');
+          console.log('✅ Logs updated');
         })
         .catch(err => {
           console.error('❌ Refresh failed:', err);

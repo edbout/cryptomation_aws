@@ -1,18 +1,8 @@
 # Polymarket Trading Bot — Overview
 What it does: Trades Polymarket 5-minute binary up/down markets for BTC, ETH, XRP, SOL, and DOGE using a momentum strategy.
 
-# Core Strategy
-    Monitors 3 independent price feeds simultaneously (Bybit HTTP polling, Coinbase WebSocket, Chainlink WebSocket)
-    Only trades when all three agree on direction within 0.5% divergence
-    Uses Order Book Imbalance (OBI) from Bybit's top-5 order book as a confirmation filter
-    Edge calculation draws on per-asset, per-minute calibrated historical win rates (via calibrate_params.py + Redis)
-    Fixed $5 USD notional per trade, market orders only, max 3 concurrent
-    Execution Timing
-    Precisely scheduled every 5 minutes:
-
-    M:00s:10 → Redeem winning positions
-    M:01s:00 → Pre-approve next market's tokens
-    M:00–04s:00 → Execute if signal valid and edge > 25%
+# Architecture: 
+Three WebSocket feeds (Bybit inverse futures, Coinbase PERP, Chainlink via Polymarket) provide cross-validated 5-minute momentum signals. All trading is 100% event-driven through Bybit ticker ticks — the timer loop only handles redemptions and token pre-approvals. When Bybit fires a tick and all three sources agree on direction with OBI confirmation, the bot places a Kelly-sized order on the corresponding Polymarket YES or NO 5m binary. It then manages the open position every 5 seconds with TP/SL/trailing stop logic. After the 5m market closes, the redeem job at M:00s:10 collects winnings.
 
 # Key Components
     File	Role
@@ -26,9 +16,8 @@ What it does: Trades Polymarket 5-minute binary up/down markets for BTC, ETH, XR
 # Infrastructure
     Redis Cloud — state, signals, order tracking, stats, caching
     Polygon RPC — balance/allowance reads with 7-provider failover
-    Heroku — deployment target (also runs locally)
+    AWS — deployment target (also runs locally)
     DRY_RUN=true currently set — no live trades being placed
-    I've saved a detailed memory of this project. What would you like to work on?
 
 
 
