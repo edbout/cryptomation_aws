@@ -36,18 +36,53 @@ def sync_cloud_to_local():
 
             for key in keys:
                 try:
-                    dump = cloud.dump(key)
-                    if dump is None:
-                        print(f"SKIP {key!r}: dump returned None")
-                        continue
+                    t = cloud.type(key)
 
-                    ttl = cloud.pttl(key)
-                    if ttl is None or ttl < 0:
-                        ttl = 0
+                    if t == b"string":
+                        value = cloud.get(key)
+                        ttl = cloud.ttl(key)
+                        if ttl and ttl > 0:
+                            pipe.setex(key, ttl, value)
+                        else:
+                            pipe.set(key, value)
 
-                    pipe.restore(key, ttl, dump, replace=True)
+                    elif t == b"hash":
+                        value = cloud.hgetall(key)
+                        if value:
+                            pipe.hset(key, mapping=value)
+                        ttl = cloud.ttl(key)
+                        if ttl and ttl > 0:
+                            pipe.expire(key, ttl)
+
+                    elif t == b"list":
+                        value = cloud.lrange(key, 0, -1)
+                        if value:
+                            pipe.rpush(key, *value)
+                        ttl = cloud.ttl(key)
+                        if ttl and ttl > 0:
+                            pipe.expire(key, ttl)
+
+                    elif t == b"set":
+                        value = cloud.smembers(key)
+                        if value:
+                            pipe.sadd(key, *value)
+                        ttl = cloud.ttl(key)
+                        if ttl and ttl > 0:
+                            pipe.expire(key, ttl)
+
+                    elif t == b"zset":
+                        value = cloud.zrange(key, 0, -1, withscores=True)
+                        if value:
+                            mapping = {member: score for member, score in value}
+                            pipe.zadd(key, mapping)
+                        ttl = cloud.ttl(key)
+                        if ttl and ttl > 0:
+                            pipe.expire(key, ttl)
+
+                    else:
+                        print("Unhandled type for key", key, "type:", t)
+
                     count += 1
-
                     if count % 1000 == 0:
                         print(f"Synced {count} keys...")
 
