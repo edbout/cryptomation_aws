@@ -76,9 +76,9 @@
           
           // Update log content
           const logElement = document.getElementById('log-content');
-          const newContent = doc.querySelector('pre').textContent;
-          
-          logElement.textContent = newContent;
+          const newContent = doc.querySelector('pre').innerHTML;
+
+          logElement.innerHTML = newContent;
           
           // Scroll to bottom after update
           //logElement.scrollTop = logElement.scrollHeight;
