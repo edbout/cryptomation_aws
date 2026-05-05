@@ -61,7 +61,13 @@ class PriceTracker:
             price_std = float(minute_data.get('price_std', 0.0))
             optimal_edge = float(minute_data.get('optimal_edge', 10.0))
 
-            should_trade = win_rate >= Config.MIN_WIN_RATE_THRESHOLD and count > 50
+            # Break-even win rate = entry price, so require win_rate > max(60%, avg_price*100 + 3pp)
+            breakeven_threshold = avg_price * 100 + 3.0 if avg_price > 0 else 0.0
+            should_trade = (
+                count > 50
+                and win_rate >= Config.MIN_WIN_RATE_THRESHOLD
+                and win_rate >= breakeven_threshold
+            )
             
             stats = MinuteStats(
                 win_rate=round(win_rate, 3),
@@ -212,44 +218,44 @@ class PriceTracker:
     # ---------------------------------------------------------------------------
     _HIST_PARAMS: Dict[str, Dict] = {
         "btcusdt": {
-            "all": {"time_window": 15, "pct_tol": 0.150, "min_matches": 20},
-            0:     {"time_window": 30, "pct_tol": 0.010, "min_matches": 20},
-            1:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 15},
-            2:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 20},
-            3:     {"time_window": 30, "pct_tol": 0.100, "min_matches": 20},
-            4:     {"time_window": 15, "pct_tol": 0.100, "min_matches": 20},
+            "all": {"time_window": 60, "pct_tol": 0.005, "min_matches":  7},
+            0:     {"time_window": 30, "pct_tol": 0.025, "min_matches":  5},
+            1:     {"time_window": 30, "pct_tol": 0.100, "min_matches":  3},
+            2:     {"time_window": 30, "pct_tol": 0.005, "min_matches": 20},
+            3:     {"time_window": 15, "pct_tol": 0.075, "min_matches": 20},
+            4:     {"time_window": 30, "pct_tol": 0.010, "min_matches":  7},
         },
         "dogeusdt": {
-            "all": {"time_window": 15, "pct_tol": 0.010, "min_matches": 20},
+            "all": {"time_window": 60, "pct_tol": 0.010, "min_matches": 20},
             0:     {"time_window": 15, "pct_tol": 0.010, "min_matches": 20},
-            1:     {"time_window": 30, "pct_tol": 0.010, "min_matches": 20},
-            2:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 20},
-            3:     {"time_window": 15, "pct_tol": 0.075, "min_matches": 5},
-            4:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 20},
+            1:     {"time_window": 30, "pct_tol": 0.050, "min_matches": 15},
+            2:     {"time_window": 15, "pct_tol": 0.010, "min_matches": 20},
+            3:     {"time_window": 30, "pct_tol": 0.005, "min_matches":  7},
+            4:     {"time_window": 30, "pct_tol": 0.010, "min_matches":  3},
         },
         "ethusdt": {
-            "all": {"time_window": 15, "pct_tol": 0.005, "min_matches": 20},
-            0:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 20},
-            1:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 20},
-            2:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 20},
-            3:     {"time_window": 30, "pct_tol": 0.025, "min_matches": 20},
-            4:     {"time_window": 15, "pct_tol": 0.100, "min_matches": 5},
+            "all": {"time_window": 60, "pct_tol": 0.005, "min_matches": 10},
+            0:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 15},
+            1:     {"time_window": 30, "pct_tol": 0.005, "min_matches":  7},
+            2:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 10},
+            3:     {"time_window": 15, "pct_tol": 0.025, "min_matches": 20},
+            4:     {"time_window": 15, "pct_tol": 0.025, "min_matches": 10},
         },
         "solusdt": {
-            "all": {"time_window": 15, "pct_tol": 0.025, "min_matches": 15},
-            0:     {"time_window": 30, "pct_tol": 0.075, "min_matches": 20},
-            1:     {"time_window": 15, "pct_tol": 0.100, "min_matches": 15},
-            2:     {"time_window": 30, "pct_tol": 0.075, "min_matches": 20},
-            3:     {"time_window": 15, "pct_tol": 0.010, "min_matches": 15},
-            4:     {"time_window": 15, "pct_tol": 0.075, "min_matches": 3},
+            "all": {"time_window": 15, "pct_tol": 0.005, "min_matches": 20},
+            0:     {"time_window": 30, "pct_tol": 0.025, "min_matches":  5},
+            1:     {"time_window": 30, "pct_tol": 0.005, "min_matches": 15},
+            2:     {"time_window": 15, "pct_tol": 0.010, "min_matches": 15},
+            3:     {"time_window": 15, "pct_tol": 0.150, "min_matches": 15},
+            4:     {"time_window": 15, "pct_tol": 0.150, "min_matches": 20},
         },
         "xrpusdt": {
-            "all": {"time_window": 15, "pct_tol": 0.150, "min_matches": 20},
-            0:     {"time_window": 15, "pct_tol": 0.100, "min_matches": 7},
-            1:     {"time_window": 30, "pct_tol": 0.150, "min_matches": 20},
-            2:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 20},
-            3:     {"time_window": 30, "pct_tol": 0.005, "min_matches": 20},
-            4:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 7},
+            "all": {"time_window": 15, "pct_tol": 0.025, "min_matches": 10},
+            0:     {"time_window": 30, "pct_tol": 0.005, "min_matches": 20},
+            1:     {"time_window": 30, "pct_tol": 0.025, "min_matches": 10},
+            2:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 15},
+            3:     {"time_window": 15, "pct_tol": 0.025, "min_matches": 10},
+            4:     {"time_window": 30, "pct_tol": 0.010, "min_matches": 15},
         },
     }
     _HIST_PARAMS_DEFAULT = Config.HIST_PARAMS_DEFAULT # {"time_window": 15, "pct_tol": 0.025, "min_matches": 10}
@@ -490,9 +496,14 @@ class PriceTracker:
         best_edge = 10.0
         best_ev = 0.0
 
+        minute_avg = mean(h['price'] for h in minute_history)
+
         for edge_pct in [e * 0.5 for e in range(4, 41)]:  # 2.0% to 20.0% in 0.5% steps
-            # Simulate: "would have traded if market price was edge_pct% below historical avg"
-            qualifying = [h for h in minute_history if h.get('price', 0.5) < (0.5 * (1 - edge_pct / 100))]
+            # Qualify trades where price was edge_pct% below the minute's average fair value
+            qualifying = [
+                h for h in minute_history
+                if minute_avg > 0 and (minute_avg - h.get('price', minute_avg)) / minute_avg * 100 >= edge_pct
+            ]
             if len(qualifying) < 10:
                 continue
             wins = sum(1 for h in qualifying if h.get('direction') == h.get('outcome'))

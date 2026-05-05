@@ -725,6 +725,11 @@ class BybitManager:
             else:
                 chainlink_pct = 0.0
 
+            # Chainlink oracle only fires on 0.5%+ deviation — stale when move is small
+            now_ts_sig = timemodule.time()
+            chainlink_age = now_ts_sig - self.chainlink_feed.chainlink_last_update_ts.get(chainlink_sym, 0.0)
+            chainlink_fresh = chainlink_age < 30.0
+
             coinbase_current = self.coinbase_feed.last_prices.get(coinbase_sym, 0.0)
             coinbase_base_5m = self.coinbase_feed.coinbase_5m_bases.get(coinbase_sym, 0.0)
 
@@ -733,19 +738,29 @@ class BybitManager:
             else:
                 coinbase_pct = 0.0
 
+            # When Chainlink is fresh, enforce magnitude; when stale, only check direction
+            if chainlink_fresh:
+                chainlink_strong = abs(chainlink_pct) > 0.03
+            else:
+                logger.debug(f"⚠️ get_signal | {sym} Chainlink stale ({chainlink_age:.0f}s) — direction-only")
+                chainlink_strong = (chainlink_pct != 0.0)  # any direction tick is ok
+
             strong_enough = (
                 abs(bybit_5m_pct) > 0.03
-                and abs(coinbase_pct) > 0.0
-                and abs(chainlink_pct) > 0.03
+                and abs(coinbase_pct) > 0.03
+                and chainlink_strong
             )
 
             same_direction = (
                 (bybit_5m_pct > 0) == (chainlink_pct > 0) == (coinbase_pct > 0)
             )
 
+            max_div = max(0.12, abs(bybit_5m_pct) * 0.6)  # relative ±60%, min 0.12%
+            # When Chainlink is stale skip the divergence check for it
+            chainlink_div_ok = (not chainlink_fresh) or (abs(bybit_5m_pct - chainlink_pct) <= max_div)
             not_too_far = (
-                abs(bybit_5m_pct - chainlink_pct) <= 0.5
-                and abs(bybit_5m_pct - coinbase_pct) <= 0.5
+                chainlink_div_ok
+                and abs(bybit_5m_pct - coinbase_pct) <= max_div
             )
 
             aligned = strong_enough and same_direction and not_too_far
@@ -964,6 +979,7 @@ class ChainlinkFeed:
         self.chainlink_5m_bases = {sym: 0.0 for sym in Config.CHAINLINK_SYMBOLS}
         self.chainlink_5m_ts = {sym: 0.0 for sym in Config.CHAINLINK_SYMBOLS}
         self.chainlink_bars = {}
+        self.chainlink_last_update_ts: Dict[str, float] = {}
         self.global_last_snapshot = 0
 
         self.running = False
@@ -988,6 +1004,7 @@ class ChainlinkFeed:
 
         symbol = symbol.lower()
         self.last_prices[symbol] = price
+        self.chainlink_last_update_ts[symbol] = now  # track oracle freshness
 
         # Check if new 5m bar
         prior_bar = self.chainlink_bars.get(symbol)
@@ -1268,6 +1285,7 @@ async def balance_check():
     try:
         balance = checker.pusd_balance
         can_trade = checker.check_trading_capacity(Config.POSITION_SIZE)
+        rdb.set("bot:live_bankroll", str(round(balance, 2)), ex=300)
         logger.info("💰 balance_check | pUSD: $%.2f | Can trade: %s", balance, can_trade)
         return can_trade
     except Exception as e:

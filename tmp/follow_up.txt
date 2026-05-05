@@ -84,3 +84,208 @@
 so back to my polymarket trading bot, i am now working on a new git repo https://github.com/edbout/cryptomation_aws
 hosting no longer on heroku but on a AWS linux server hosted in Dublin, in my code i have integrated a bit of ruby to show me the logs on a page http://54.229.189.249:4567 ( unsecure is fine for now,  ill configure firewall soon ), running my script for a few days and i am loosing money, can you go over my code, describe again what it's doing and usggets improve ments 
 code in C:\Users\EdwinBout\Documents\Prive\Cryptomation aws
+
+
+Now I have enough to write the full analysis. Here it is:
+
+Profitability Deep Dive
+I'll work through the issues from most to least impactful, with exact line references and code fixes.
+
+1. Kelly floors negative-EV trades at $1 (CRITICAL — direct money loss)
+order_manager.py:819-821:
+
+
+if f_star <= 0:
+    return Config.KELLY_MIN_BET   # ← this is the bug
+When f_star <= 0, the Kelly formula is telling you the trade has negative expected value — you should not trade it at all. Instead you're placing a $1 trade every time. This is the single biggest money-losing bug still in the code.
+
+Fix in _calc_kelly_size — return 0.0 instead:
+
+
+if f_star <= 0:
+    return 0.0   # signal: no edge, caller must skip
+Fix in safe_place_order at line 893, after size = self._calc_kelly_size(...):
+
+
+size = self._calc_kelly_size(_win_rate, order_price, kelly_boost)
+if size <= 0:
+    logger.info(f"✗ safe_place_order | Kelly f*<=0 for {asset} @ {order_price:.3f} (win={_win_rate:.1f}%) — negative EV, skipping")
+    return None
+2. MIN_WIN_RATE_THRESHOLD=60% is wrong for high-price entries (CRITICAL)
+price_tracker.py:64:
+
+
+should_trade = win_rate >= Config.MIN_WIN_RATE_THRESHOLD and count > 50
+The break-even win rate for a binary market equals the entry price. Buying YES at 0.90 requires a 90% win rate to break even — 60% is catastrophic negative EV. The should_trade gate never catches this because it's a flat 60% regardless of avg entry price.
+
+Actually, Kelly in fix #1 already handles this mathematically (f* goes negative), but should_trade=False is your first line of defence. Make it aware of entry price:
+
+
+# avg_price is the historical average entry for this minute bucket
+should_trade = (
+    count > 50
+    and win_rate >= Config.MIN_WIN_RATE_THRESHOLD   # absolute floor (60%)
+    and win_rate >= avg_price * 100 + 3.0           # must beat break-even by 3pp
+)
+This auto-calibrates: at avg entry 0.90, require 93% win rate. At avg entry 0.55, require 60.5% (the absolute floor dominates).
+
+3. _calc_optimal_edge always returns 10.0 — backtest is broken (CRITICAL)
+price_tracker.py:495:
+
+
+qualifying = [h for h in minute_history if h.get('price', 0.5) < (0.5 * (1 - edge_pct / 100))]
+At edge_pct=10, the threshold is 0.5 * 0.90 = 0.45. Since all your entries are 0.80–0.97 (you trade high-probability markets), price < 0.45 is always false. qualifying is empty for every edge_pct, best_ev stays 0, and the function always returns the default 10.0. The entire backtest infrastructure — which feeds optimal_edge into the dynamic edge threshold — is producing garbage.
+
+The correct interpretation is: "edge = how much cheaper is current market price vs. historical fair value". Use the minute's average price as the fair value proxy:
+
+
+def _calc_optimal_edge(self, history: List[Dict], minute: int) -> float:
+    minute_history = [h for h in history if h.get('minute') == minute]
+    if len(minute_history) < 20:
+        return 10.0
+
+    minute_avg = mean(h['price'] for h in minute_history)
+    if minute_avg <= 0:
+        return 10.0
+
+    best_edge = 10.0
+    best_ev = 0.0
+
+    for edge_pct in [e * 0.5 for e in range(4, 41)]:  # 2.0% to 20.0%
+        # Qualify trades where price was edge_pct% below the minute's avg fair value
+        qualifying = [
+            h for h in minute_history
+            if (minute_avg - h['price']) / minute_avg * 100 >= edge_pct
+        ]
+        if len(qualifying) < 10:
+            continue
+        wins = sum(1 for h in qualifying if h.get('direction') == h.get('outcome'))
+        win_rate = wins / len(qualifying)
+        avg_entry = mean(h['price'] for h in qualifying)
+        ev = win_rate * (1 - avg_entry) - (1 - win_rate) * avg_entry
+        if ev > best_ev:
+            best_ev = ev
+            best_edge = edge_pct
+
+    return best_edge
+After deploying this fix, wipe stats:summary:* and stats:optimal:* from Redis so it recomputes from clean history. The prices:fairvalue data is fine to keep.
+
+4. Coinbase threshold is 0% — not real cross-validation (SIGNIFICANT)
+main.py:738-740:
+
+
+strong_enough = (
+    abs(bybit_5m_pct) > 0.03
+    and abs(coinbase_pct) > 0.0      # ← passes on any nonzero tick
+    and abs(chainlink_pct) > 0.03
+)
+The abs(coinbase_pct) > 0.0 check fires the moment Coinbase has had a single tick since the 5m bar opened — which is always. Coinbase is providing zero filtering. Change it to match the other two:
+
+
+strong_enough = (
+    abs(bybit_5m_pct) > 0.03
+    and abs(coinbase_pct) > 0.03
+    and abs(chainlink_pct) > 0.03
+)
+5. Divergence tolerance 0.5% is too wide for small signals (SIGNIFICANT)
+main.py:746-749:
+
+
+not_too_far = (
+    abs(bybit_5m_pct - chainlink_pct) <= 0.5
+    and abs(bybit_5m_pct - coinbase_pct) <= 0.5
+)
+When Bybit is at 0.04%, a 0.5% tolerance means Chainlink could read -0.46% (opposite direction, yet it passes same_direction check only if the sign is also wrong there — actually it does fail same_direction). The real problem: at 0.08% Bybit, Chainlink at 0.58% would pass — those are wildly different signals.
+
+Use a relative tolerance with an absolute minimum:
+
+
+max_div = max(0.12, abs(bybit_5m_pct) * 0.6)  # ±60% relative, min 0.12%
+not_too_far = (
+    abs(bybit_5m_pct - chainlink_pct) <= max_div
+    and abs(bybit_5m_pct - coinbase_pct) <= max_div
+)
+This means a 0.05% Bybit signal requires all three within 0.12% of each other (tight, genuine agreement). A 0.5% signal allows 0.30% spread (proportional).
+
+6. Chainlink oracle lag: stale signal at small moves (SIGNIFICANT)
+Chainlink on-chain feeds only update when price moves ≥0.5% (that's the deviation threshold Polymarket uses). For any Bybit move < 0.5%, the Chainlink price you're comparing against is the last oracle push — which could be minutes old. So chainlink_pct is not measuring the same 5m window as Bybit; it's measuring cumulative drift since the last oracle heartbeat.
+
+Practical consequence: at a 0.03% Bybit signal, Chainlink likely shows 0.00% (no oracle update) or a stale value from the previous push. Either it blocks the trade (if 0.00% fails the same_direction check) or it's spuriously passing because the previous push happened to be in the same direction.
+
+Fix: track whether Chainlink has actually updated in the current 5m bar. If it hasn't fired since bar open, don't require magnitude agreement — only directional alignment or treat it as unavailable:
+
+
+# In ChainlinkFeed, track when each symbol last actually updated
+chainlink_last_update_ts: Dict[str, float] = {}
+
+def update_from_chainlink(self, symbol: str, price: float):
+    ...
+    self.chainlink_last_update_ts[symbol] = now  # add this line
+Then in get_signal:
+
+
+chainlink_age = now_ts - chainlink_feed.chainlink_last_update_ts.get(chainlink_sym, 0.0)
+chainlink_fresh = chainlink_age < 30.0  # updated in last 30s
+
+# Only enforce magnitude check when Chainlink is fresh
+if chainlink_fresh:
+    strong_enough = abs(chainlink_pct) > 0.03
+else:
+    strong_enough = True  # just need direction agreement from Bybit + Coinbase
+    logger.debug(f"⚠️ get_signal | {sym} Chainlink stale ({chainlink_age:.0f}s) — direction-only")
+7. Kelly bankroll hardcoded at $50, not tracking actual balance (SIGNIFICANT)
+config.py:54 KELLY_BANKROLL = 50.0. If your actual pUSD balance drops to $20, Kelly sizes as if you have $50, risking 250% of actual capital per trade. The balance_check() at main.py:1269 already calls checker.pusd_balance — thread it through.
+
+Pass BalanceChecker into OrderManager, or expose balance via the existing checker instance:
+
+In order_manager.py, in safe_place_order (line ~891):
+
+
+from lib.balance_checker import BalanceChecker
+_checker = BalanceChecker()
+live_bankroll = _checker.pusd_balance if _checker.pusd_balance > 0 else Config.KELLY_BANKROLL
+
+_stats = self.tracker.minute_stats(asset, trigger_minute)
+_win_rate = _stats.win_rate if _stats else Config.MIN_WIN_RATE_THRESHOLD
+size = self._calc_kelly_size(_win_rate, order_price, kelly_boost, bankroll=live_bankroll)
+Update _calc_kelly_size signature:
+
+
+def _calc_kelly_size(self, win_rate_pct: float, order_price: float, kelly_boost: float = 1.0, bankroll: float = None) -> float:
+    effective_bankroll = bankroll if bankroll and bankroll > 0 else Config.KELLY_BANKROLL
+    ...
+    kelly_usd = effective_bankroll * kelly_boost * Config.KELLY_FRACTION * f_star
+8. Per-asset daily loss limit is missing (ENHANCEMENT)
+The dryrun:daily:{date} sorted set already exists. In live mode you have no circuit breaker: if BTC has a regime change and your signal fires 8 times in a row, you lose on all 8. Add a Redis-backed daily loss tracker:
+
+
+# In _validate_adjust_price, before the edge check:
+daily_key = f"daily_loss:{asset}:{get_utc_now().strftime('%Y-%m-%d')}"
+daily_loss = float(self.redis.get(daily_key) or 0)
+max_daily_loss = Config.KELLY_BANKROLL * 0.15  # 15% of bankroll per asset per day
+if daily_loss >= max_daily_loss:
+    logger.info(f"🛑 validate_adjust_price {asset} | Daily loss limit reached (${daily_loss:.2f}) — pausing")
+    return None
+In close_position_by_token, after a real close, record the loss:
+
+
+if pnl_usd < 0:
+    daily_key = f"daily_loss:{asset}:{get_utc_now().strftime('%Y-%m-%d')}"
+    self.redis.incrbyfloat(daily_key, abs(pnl_usd))
+    self.redis.expire(daily_key, 86400 * 2)
+This requires storing realized PnL per close, which you'd need to compute from entry vs exit price.
+
+9. Volume history needs 12+ completed minutes before filtering kicks in (INFORMATION)
+main.py:145 has_high_volume_prev_minute requires lookback + 2 = 12 complete 1-minute buckets, so the volume filter is inactive for the first ~12 minutes after bot startup. This is acceptable behavior, but log it clearly so you don't wonder why every early trade goes through unfiltered.
+
+Priority order for implementation
+Priority	Issue	Expected impact
+1	Kelly floors negative-EV at $1 → block instead	Stops guaranteed-loss trades
+2	_calc_optimal_edge always returns 10.0	Makes dynamic edge actually work
+3	should_trade ignores entry price vs win rate	Stops high-price buys with insufficient win rate
+4	Coinbase threshold 0% → 0.03%	Restores the 3-source cross-validation intent
+5	Kelly bankroll uses live balance	Prevents over/under-sizing
+6	Tighten source divergence to relative	Filters out noise-trigger agreements
+7	Chainlink freshness tracking	Prevents stale oracle from faking confirmation
+8	Per-asset daily loss limit	Caps regime-change damage
+Fixes 1–3 alone would meaningfully change the P&L profile because they stop the bot from placing trades it mathematically should never take.

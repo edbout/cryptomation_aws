@@ -548,6 +548,7 @@ class OrderManager:
                             )
                             if remaining_size < 5:
                                 self.redis.setex(cooldown_key, 300, "1")
+                                self._track_close_pnl(asset, token_id, total_filled, total_value)
                                 logger.info(
                                     f"✅ close_position_by_token {asset} | Fully closed | "
                                     f"total={total_filled:.4f} value=${total_value:.2f}"
@@ -587,6 +588,7 @@ class OrderManager:
             # All attempts done
             if any_filled:
                 self.redis.setex(cooldown_key, 300, "1")
+                self._track_close_pnl(asset, token_id, total_filled, total_value)
                 logger.info(
                     f"⚠️ close_position_by_token {asset} | Partially closed | "
                     f"filled={total_filled:.4f} value=${total_value:.2f} remaining={remaining_size:.2f}"
@@ -627,7 +629,28 @@ class OrderManager:
             print(f"{p['token_id'][-8:]:<12} | {p['size']:>8.4f} | {p['cur_price']:>6.3f} | ${p['value']:>6.2f} | {p['side']}")
         
         print("-"*100)
-  
+
+    def _track_close_pnl(self, asset: str, token_id: str, filled_shares: float, filled_value: float) -> None:
+        """Record realized loss to daily circuit-breaker key. Silently skips on any error."""
+        try:
+            order_id = self.redis.get(f"order_token_idx:{token_id}")
+            if not order_id:
+                return
+            order_data_str = self.redis.hget(f"order:{order_id}", "data")
+            if not order_data_str:
+                return
+            entry_price = float(json.loads(order_data_str).get("price", 0))
+            if entry_price <= 0 or filled_shares <= 0:
+                return
+            pnl_usd = filled_value - entry_price * filled_shares
+            if pnl_usd < 0:
+                daily_key = f"daily_loss:{asset}:{get_utc_now().strftime('%Y-%m-%d')}"
+                self.redis.incrbyfloat(daily_key, abs(pnl_usd))
+                self.redis.expire(daily_key, 86400 * 2)
+                logger.debug(f"📊 _track_close_pnl | {asset} loss=${abs(pnl_usd):.2f} added to {daily_key}")
+        except Exception:
+            pass
+
     def schedule_once(self, coro, delay_seconds: float) -> asyncio.Task:
         async def delayed():
             sleep_start = time.perf_counter()
@@ -788,7 +811,7 @@ class OrderManager:
             logger.warning(f"_check_clob_liquidity | {asset} check error (passing through): {e}")
             return True, "check_error_passthrough", mid_price
 
-    def _calc_kelly_size(self, win_rate_pct: float, order_price: float, kelly_boost: float = 1.0) -> float:
+    def _calc_kelly_size(self, win_rate_pct: float, order_price: float, kelly_boost: float = 1.0, bankroll: float = None) -> float:
         """Fractional Kelly position sizing for binary Polymarket outcomes.
 
         Kelly formula for a binary contract at market price p:
@@ -817,15 +840,15 @@ class OrderManager:
         f_star = (b * p - q) / b  # full Kelly fraction
 
         if f_star <= 0:
-            # No mathematical edge — floor at minimum rather than blocking (already gated upstream)
-            return Config.KELLY_MIN_BET
+            return 0.0  # negative EV — caller must skip the trade
 
-        kelly_usd = Config.KELLY_BANKROLL * kelly_boost * Config.KELLY_FRACTION * f_star
+        effective_bankroll = bankroll if bankroll and bankroll > 0 else Config.KELLY_BANKROLL
+        kelly_usd = effective_bankroll * kelly_boost * Config.KELLY_FRACTION * f_star
         size = round(max(Config.KELLY_MIN_BET, min(kelly_usd, Config.KELLY_MAX_BET)), 2)
 
         logger.debug(
             f"_calc_kelly_size | p={p:.2f} q={q:.2f} b={b:.3f} f*={f_star:.4f} "
-            f"boost={kelly_boost:.2f} → ${kelly_usd:.2f} → clamped ${size:.2f}"
+            f"boost={kelly_boost:.2f} bankroll=${effective_bankroll:.0f} → ${kelly_usd:.2f} → clamped ${size:.2f}"
         )
         return size
 
@@ -890,11 +913,19 @@ class OrderManager:
                 # minute_stats is already in the in-memory cache from _validate_adjust_price.
                 _stats = self.tracker.minute_stats(asset, trigger_minute)
                 _win_rate = _stats.win_rate if _stats else Config.MIN_WIN_RATE_THRESHOLD
-                size = self._calc_kelly_size(_win_rate, order_price, kelly_boost)
+                live_bankroll_str = self.redis.get("bot:live_bankroll")
+                live_bankroll = float(live_bankroll_str) if live_bankroll_str else Config.KELLY_BANKROLL
+                size = self._calc_kelly_size(_win_rate, order_price, kelly_boost, bankroll=live_bankroll)
+                if size <= 0:
+                    logger.info(
+                        f"✗ safe_place_order | Kelly f*<=0 for {asset} @ {order_price:.3f} "
+                        f"(win={_win_rate:.1f}%) — negative EV, skipping"
+                    )
+                    return None
                 logger.info(
                     f"💰 safe_place_order | Kelly size ${size:.2f} "
                     f"(win_rate={_win_rate:.1f}% price={order_price:.4f} "
-                    f"bankroll=${Config.KELLY_BANKROLL:.0f} frac={Config.KELLY_FRACTION})"
+                    f"bankroll=${live_bankroll:.0f} frac={Config.KELLY_FRACTION})"
                 )
                 
                 # Validate client integrity
@@ -1218,17 +1249,28 @@ class OrderManager:
         try:
             if Config.DRY_RUN:
                 # No real position in dry-run — use stored order size so manage_positions still runs
-                order_dry = await self.get_order_from_redis_by_token(token_id)
-                if not order_dry:
+                order_record = await self.get_order_from_redis_by_token(token_id)
+                if not order_record:
                     logger.debug(f"🧪 place_tp_orders DRY_RUN | No stored order for {token_id[-8:]}")
                     return
-                position_size = abs(float(order_dry.get("size", size)))
+                position_size = abs(float(order_record.get("size", size)))
             else:
-                pos = await self._wait_for_active_asset_lock_and_get_position(asset, token_id)
-                if not pos:
-                    logger.info(f"ℹ️ place_tp_orders {asset_label:>8} | No position found for {market_slug}")
-                    return
-                position_size = float(pos.get("size", size))
+                # Polymarket Data API has a 30-60s lag after fill — use the Redis order record
+                # (written at fill time) as the primary source for position size.
+                # manage_positions runs at 30s+ intervals by which time the API is consistent.
+                order_record = await self.get_order_from_redis_by_token(token_id)
+                if order_record:
+                    position_size = abs(float(order_record.get("size", size)))
+                    logger.debug(
+                        f"✓ place_tp_orders {asset_label:>8} | Redis order size={position_size:.2f} (API lag bypass)"
+                    )
+                else:
+                    # Fallback: API lookup (should not be needed in normal flow)
+                    pos = await self._wait_for_active_asset_lock_and_get_position(asset, token_id)
+                    if not pos:
+                        logger.info(f"ℹ️ place_tp_orders {asset_label:>8} | No position found for {market_slug}")
+                        return
+                    position_size = float(pos.get("size", size))
 
             if position_size < 5.0:
                 logger.info(
@@ -1364,11 +1406,23 @@ class OrderManager:
                     f"win_rate={win_rate:.3f}% | avg_price={avg_price:.3f} | count={count} | skipped")
             return None
         
+        # Daily loss circuit breaker — pause asset if it lost >15% of bankroll today
+        daily_key = f"daily_loss:{asset}:{get_utc_now().strftime('%Y-%m-%d')}"
+        daily_loss = float(self.redis.get(daily_key) or 0)
+        live_bankroll_str = self.redis.get("bot:live_bankroll")
+        live_bankroll = float(live_bankroll_str) if live_bankroll_str else Config.KELLY_BANKROLL
+        max_daily_loss = live_bankroll * 0.15
+        if daily_loss >= max_daily_loss:
+            logger.info(
+                f"🛑 validate_adjust_price {asset} | Daily loss ${daily_loss:.2f} >= limit ${max_daily_loss:.2f} — pausing"
+            )
+            return None
+
         active_asset_key = f"active_{token_id}"
         if self.redis.exists(active_asset_key):
             logger.debug(f"⏳ validate_adjust_price {asset:>8} | active order {active_asset_key} already exists | skipped")
             return None
-        
+
         avg_price = getattr(stats, 'avg_price', 0.0)
         win_rate = getattr(stats, 'win_rate', 0.0)
         count = getattr(stats, 'count', 0)
