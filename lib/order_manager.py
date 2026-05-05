@@ -886,6 +886,10 @@ class OrderManager:
                 # Calculate base order price (slippage protected)
                 trigger_minute = int(time.strftime("%M")) % 5
                 order_price = max(round(price * 0.999, 2), Config.PRICE_MIN)
+                if order_price >= 1.0:
+                    # Polymarket mid near 1.0 means market has resolved — skip cleanly
+                    logger.debug(f"✗ safe_place_order | {asset} near-resolved (mid={price:.4f} → order_price={order_price}) — skip")
+                    return None
 
                 # Forward open_price to validation
                 order_price = await self._validate_adjust_price(

@@ -103,8 +103,11 @@ class PriceTracker:
             logger.error(f"✗ {asset} | record_signal | invalid trigger_minute: {trigger_minute}")
             return {}
 
-        if not 0.01 <= price <= 0.999:
-            logger.error(f"✗ {asset} | record_signal | invalid price: {price}")
+        if price >= 1.0:
+            logger.debug(f"✗ {asset} | record_signal | resolved market price {price:.4f} — skip")
+            return {}
+        if price < 0.01:
+            logger.warning(f"✗ {asset} | record_signal | unexpectedly low price: {price}")
             return {}
 
         now = get_utc_now()
@@ -368,6 +371,9 @@ class PriceTracker:
         Cap:   50,000 records (~17 days at 10 samples/candle, 288 candles/day)
         Floor: records newer than 72h are never evicted by score-based cleanup
         """
+        if poly_price >= 1.0 or poly_price <= 0.0:
+            return  # market resolved or bad data — don't pollute fairvalue history
+
         SAMPLE_MARKS = {0, 30, 60, 90, 120, 150, 180, 210, 240, 270}
         closest = min(SAMPLE_MARKS, key=lambda m: abs(candle_seconds - m))
         if abs(candle_seconds - closest) > 7:
