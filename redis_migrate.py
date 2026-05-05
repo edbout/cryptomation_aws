@@ -25,69 +25,34 @@ def sync_cloud_to_local():
     local.flushdb()
     print("Local Redis flushed.")
 
-    print("Scanning cloud Redis keys...")
     cursor = 0
     count = 0
 
     while True:
         cursor, keys = cloud.scan(cursor=cursor, count=1000)
+
         if keys:
             pipe = local.pipeline(transaction=False)
 
             for key in keys:
-                t = cloud.type(key)
+                try:
+                    dump = cloud.dump(key)
+                    if dump is None:
+                        print(f"SKIP {key!r}: dump returned None")
+                        continue
 
-                if t == b"string":
-                    value = cloud.get(key)
-                    ttl = cloud.ttl(key)
-                    if ttl and ttl > 0:
-                        pipe.setex(key, ttl, value)
-                    else:
-                        pipe.set(key, value)
+                    ttl = cloud.pttl(key)
+                    if ttl is None or ttl < 0:
+                        ttl = 0
 
-                elif t == b"list":
-                    value = cloud.lrange(key, 0, -1)
-                    pipe.delete(key)
-                    if value:
-                        pipe.rpush(key, *value)
-                    ttl = cloud.ttl(key)
-                    if ttl and ttl > 0:
-                        pipe.expire(key, ttl)
+                    pipe.restore(key, ttl, dump, replace=True)
+                    count += 1
 
-                elif t == b"set":
-                    value = cloud.smembers(key)
-                    pipe.delete(key)
-                    if value:
-                        pipe.sadd(key, *value)
-                    ttl = cloud.ttl(key)
-                    if ttl and ttl > 0:
-                        pipe.expire(key, ttl)
+                    if count % 1000 == 0:
+                        print(f"Synced {count} keys...")
 
-                elif t == b"zset":
-                    value = cloud.zrange(key, 0, -1, withscores=True)
-                    pipe.delete(key)
-                    if value:
-                        mapping = {member: score for member, score in value}
-                        pipe.zadd(key, mapping)
-                    ttl = cloud.ttl(key)
-                    if ttl and ttl > 0:
-                        pipe.expire(key, ttl)
-
-                elif t == b"hash":
-                    value = cloud.hgetall(key)
-                    pipe.delete(key)
-                    if value:
-                        pipe.hset(key, mapping=value)
-                    ttl = cloud.ttl(key)
-                    if ttl and ttl > 0:
-                        pipe.expire(key, ttl)
-
-                else:
-                    print("Unhandled type for key", key, "type:", t)
-
-                count += 1
-                if count % 1000 == 0:
-                    print(f"Synced {count} keys...")
+                except Exception as e:
+                    print(f"FAILED {key!r}: {e}")
 
             pipe.execute()
 
@@ -95,7 +60,8 @@ def sync_cloud_to_local():
             break
 
     print(f"Sync complete. Copied {count} keys from cloud Redis to local Redis.")
-    print("Local DBSIZE:", local.dbsize())
+    print("Final local DBSIZE:", local.dbsize())
+    print("Sample local keys:", local.keys("*")[:10])
 
 
 if __name__ == "__main__":
