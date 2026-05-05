@@ -17,6 +17,66 @@ def connect_local_redis():
     )
 
 
+def copy_by_type(src, dst, key):
+    t = src.type(key)
+
+    if t == b"string":
+        value = src.get(key)
+        if value is None:
+            return False
+        ttl = src.ttl(key)
+        if ttl and ttl > 0:
+            dst.setex(key, ttl, value)
+        else:
+            dst.set(key, value)
+        return True
+
+    if t == b"hash":
+        value = src.hgetall(key)
+        if not value:
+            return False
+        dst.hset(key, mapping=value)
+        ttl = src.ttl(key)
+        if ttl and ttl > 0:
+            dst.expire(key, ttl)
+        return True
+
+    if t == b"list":
+        value = src.lrange(key, 0, -1)
+        if not value:
+            return False
+        dst.delete(key)
+        dst.rpush(key, *value)
+        ttl = src.ttl(key)
+        if ttl and ttl > 0:
+            dst.expire(key, ttl)
+        return True
+
+    if t == b"set":
+        value = src.smembers(key)
+        if not value:
+            return False
+        dst.sadd(key, *value)
+        ttl = src.ttl(key)
+        if ttl and ttl > 0:
+            dst.expire(key, ttl)
+        return True
+
+    if t == b"zset":
+        value = src.zrange(key, 0, -1, withscores=True)
+        if not value:
+            return False
+        mapping = {member: score for member, score in value}
+        dst.zadd(key, mapping)
+        ttl = src.ttl(key)
+        if ttl and ttl > 0:
+            dst.expire(key, ttl)
+        return True
+
+    print(f"Unhandled type for key {key!r}: {t!r}")
+    return False
+
+
 def sync_cloud_to_local():
     cloud = RedisCache()
     local = connect_local_redis()
@@ -26,75 +86,49 @@ def sync_cloud_to_local():
     print("Local Redis flushed.")
 
     cursor = 0
-    count = 0
+    total = 0
+    dump_ok = 0
+    fallback_ok = 0
+    failed = 0
 
     while True:
         cursor, keys = cloud.scan(cursor=cursor, count=1000)
 
-        if keys:
-            pipe = local.pipeline(transaction=False)
+        for key in keys:
+            total += 1
+            try:
+                payload = cloud.dump(key)
+                if payload is not None:
+                    ttl = cloud.pttl(key)
+                    if ttl < 0:
+                        ttl = 0
+                    try:
+                        local.restore(key, ttl, payload, replace=True)
+                        dump_ok += 1
+                        continue
+                    except redis.ResponseError as e:
+                        print(f"DUMP/RESTORE failed for {key!r}: {e}")
 
-            for key in keys:
-                try:
-                    t = cloud.type(key)
+                if copy_by_type(cloud, local, key):
+                    fallback_ok += 1
+                else:
+                    failed += 1
 
-                    if t == b"string":
-                        value = cloud.get(key)
-                        ttl = cloud.ttl(key)
-                        if ttl and ttl > 0:
-                            pipe.setex(key, ttl, value)
-                        else:
-                            pipe.set(key, value)
+            except Exception as e:
+                print(f"FAILED {key!r}: {e}")
+                failed += 1
 
-                    elif t == b"hash":
-                        value = cloud.hgetall(key)
-                        if value:
-                            pipe.hset(key, mapping=value)
-                        ttl = cloud.ttl(key)
-                        if ttl and ttl > 0:
-                            pipe.expire(key, ttl)
-
-                    elif t == b"list":
-                        value = cloud.lrange(key, 0, -1)
-                        if value:
-                            pipe.rpush(key, *value)
-                        ttl = cloud.ttl(key)
-                        if ttl and ttl > 0:
-                            pipe.expire(key, ttl)
-
-                    elif t == b"set":
-                        value = cloud.smembers(key)
-                        if value:
-                            pipe.sadd(key, *value)
-                        ttl = cloud.ttl(key)
-                        if ttl and ttl > 0:
-                            pipe.expire(key, ttl)
-
-                    elif t == b"zset":
-                        value = cloud.zrange(key, 0, -1, withscores=True)
-                        if value:
-                            mapping = {member: score for member, score in value}
-                            pipe.zadd(key, mapping)
-                        ttl = cloud.ttl(key)
-                        if ttl and ttl > 0:
-                            pipe.expire(key, ttl)
-
-                    else:
-                        print("Unhandled type for key", key, "type:", t)
-
-                    count += 1
-                    if count % 1000 == 0:
-                        print(f"Synced {count} keys...")
-
-                except Exception as e:
-                    print(f"FAILED {key!r}: {e}")
-
-            pipe.execute()
+            if total % 1000 == 0:
+                print(f"Processed {total} keys...")
 
         if cursor == 0:
             break
 
-    print(f"Sync complete. Copied {count} keys from cloud Redis to local Redis.")
+    print("Sync complete.")
+    print(f"Total scanned: {total}")
+    print(f"Restored via DUMP/RESTORE: {dump_ok}")
+    print(f"Copied via fallback: {fallback_ok}")
+    print(f"Failed: {failed}")
     print("Final local DBSIZE:", local.dbsize())
     print("Sample local keys:", local.keys("*")[:10])
 
