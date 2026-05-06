@@ -911,6 +911,7 @@ class OrderManager:
                 )
                 if not clob_ok:
                     logger.info(f"✗ safe_place_order | CLOB rejected {asset} {token}: {clob_reason}")
+                    self.redis.hincrby(f"stats:trade:{asset}", "clob_fail", 1)
                     return None
                 logger.debug(f"✓ safe_place_order | CLOB ok {asset} {token}: {clob_reason}")
 
@@ -991,9 +992,10 @@ class OrderManager:
                     
                     # Store and schedule
                     await self._handle_order_success(
-                        response, market_slug, token_id, asset, token, size, 
+                        response, market_slug, token_id, asset, token, size,
                         order_price, open_price, trigger_minute
                     )
+                    self.redis.hincrby(f"stats:trade:{asset}", "order_placed", 1)
                     return response
 
                 else:
@@ -1986,11 +1988,14 @@ class OrderManager:
                 # Close triggers (in priority order)
                 if current_price >= tp_price_target:
                     logger.info(f"🟢 Manage positions {asset} TP HIT price={current_price:.3f} >= {tp_price_target:.3f} | Closing {market_slug}")
+                    self.redis.hincrby(f"stats:trade:{asset}", "tp", 1)
+                    self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="tp")
                     return
 
                 elif pnl_pct <= -sl_pct:
                     logger.info(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (<= -{sl_pct:.1f}%) | Closing {market_slug}")
+                    self.redis.hincrby(f"stats:trade:{asset}", "sl", 1)                   
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="sl")
                     return
 
@@ -1998,6 +2003,8 @@ class OrderManager:
                     logger.info(
                         f"🟠 Manage positions {asset} TRAIL HIT pnl={pnl_pct:.1f}% peak={max_pnl_pct:.1f}% stop={trailing_stop_pct:.1f}% | Closing {market_slug}"
                     )
+                    self.redis.hincrby(f"stats:trade:{asset}", "trail_stop", 1)
+                    self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="trail")
                     return
 

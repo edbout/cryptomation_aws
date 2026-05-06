@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="30">
+  <title>Bot Stats</title>
+  <style>
+    body { background: #0d0d0d; color: #c8c8c8; font-family: monospace; font-size: 12px; margin: 0; padding: 12px; }
+    nav { margin-bottom: 10px; }
+    nav a { color: #5af; text-decoration: none; margin-right: 16px; font-size: 13px; }
+    nav a:hover { text-decoration: underline; }
+    h1 { color: #fff; font-size: 15px; margin: 0 0 4px; }
+    .meta { color: #666; margin-bottom: 14px; font-size: 11px; }
+    table { border-collapse: collapse; width: 100%; }
+    th { background: #1a1a1a; color: #aaa; text-align: left; padding: 6px 10px; font-size: 11px; border-bottom: 1px solid #333; }
+    td { padding: 5px 10px; border-bottom: 1px solid #1f1f1f; }
+    tr:hover td { background: #141414; }
+    .asset { color: #fff; font-weight: bold; }
+    .good { color: #4caf50; }
+    .bad  { color: #f44336; }
+    .dim  { color: #555; }
+    .group { background: #111; color: #666; font-size: 10px; padding: 3px 10px; letter-spacing: 1px; text-transform: uppercase; }
+    .rate { font-size: 11px; }
+    .empty { color: #333; text-align: center; padding: 30px; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="/">Log</a>
+    <a href="/stats">Stats</a>
+  </nav>
+  <h1>Trade Stats by Asset</h1>
+  <div class="meta">Last updated: <%= time %> &nbsp;|&nbsp; <a href="/stats">Refresh</a> &nbsp;|&nbsp; auto-refreshes every 30s</div>
+
+  <% if stats.empty? %>
+    <div class="empty">No stats:trade:* keys in Redis yet — data accumulates as the bot trades.</div>
+  <% else %>
+  <table>
+    <thead>
+      <tr>
+        <th rowspan="2">Asset</th>
+        <th colspan="3">Alignment</th>
+        <th colspan="3">CLOB</th>
+        <th colspan="4">Outcome</th>
+        <th rowspan="2">Win Rate</th>
+      </tr>
+      <tr>
+        <th>Pass</th><th>Fail</th><th>Rate</th>
+        <th>Placed</th><th>Fail</th><th>Rate</th>
+        <th>TP</th><th>SL</th><th>Trail</th><th>Correct</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% stats.each do |asset, s| %>
+      <tr>
+        <td class="asset"><%= asset %></td>
+
+        <%# Alignment %>
+        <td class="good"><%= s[:alignment_pass] > 0 ? s[:alignment_pass] : '<span class="dim">0</span>'.html_safe %></td>
+        <td class="<%= s[:alignment_fail] > 0 ? 'bad' : 'dim' %>"><%= s[:alignment_fail] %></td>
+        <td class="rate <%= s[:alignment_rate] && s[:alignment_rate] >= 50 ? 'good' : 'bad' %>">
+          <%= s[:alignment_rate] ? "#{s[:alignment_rate]}%" : '—' %>
+        </td>
+
+        <%# CLOB %>
+        <td class="good"><%= s[:order_placed] > 0 ? s[:order_placed] : '<span class="dim">0</span>'.html_safe %></td>
+        <td class="<%= s[:clob_fail] > 0 ? 'bad' : 'dim' %>"><%= s[:clob_fail] %></td>
+        <td class="rate <%= s[:clob_rate] && s[:clob_rate] >= 50 ? 'good' : 'bad' %>">
+          <%= s[:clob_rate] ? "#{s[:clob_rate]}%" : '—' %>
+        </td>
+
+        <%# Outcome %>
+        <td class="good"><%= s[:tp] > 0 ? s[:tp] : '<span class="dim">0</span>'.html_safe %></td>
+        <td class="<%= s[:sl] > 0 ? 'bad' : 'dim' %>"><%= s[:sl] %></td>
+        <td><%= s[:trail_stop] > 0 ? s[:trail_stop] : '<span class="dim">0</span>'.html_safe %></td>
+        <td><%= s[:correct] %></td>
+
+        <%# Win Rate %>
+        <td class="rate <%= s[:win_rate] && s[:win_rate] >= 50 ? 'good' : (s[:win_rate] ? 'bad' : 'dim') %>">
+          <% if s[:win_rate] %>
+            <%= s[:win_rate] %>% <span class="dim">(<%= s[:correct] %>/<%= s[:closed] %>)</span>
+          <% else %>
+            —
+          <% end %>
+        </td>
+      </tr>
+      <% end %>
+    </tbody>
+  </table>
+  <% end %>
+</body>
+</html>

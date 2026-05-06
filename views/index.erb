@@ -2,102 +2,28 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="refresh" content="10">
   <title><%= title %></title>
   <style>
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: monospace;
-      font-size: 14px;
-      background: #000;
-      color: #eee;
-      padding: 10px;
-    }
-    header {
-      background: #222;
-      padding: 10px;
-      margin-bottom: 10px;
-      border-radius: 4px;
-      font-size: 16px;
-      font-weight: bold;
-    }
-    header small {
-      display: block;
-      font-size: 12px;
-      opacity: 0.7;
-    }
-    pre {
-      margin: 0;
-      padding: 8px;
-      background: #111;
-      border-radius: 4px;
-      border: 1px solid #333;
-      white-space: pre-wrap;
-      word-wrap: break-word;
-      max-height: calc(100vh - 120px);
-      overflow-y: auto;
-    }
-    mark.info { background: #003300; color: #6ddb6d; padding: 0 2px; }
-    mark.err { background: #400; color: #f00; font-weight: bold; padding: 0 2px; }
-    mark.warn { background: #440; color: #ff0; font-weight: bold; padding: 0 2px; }
-    footer {
-      margin-top: 10px;
-      font-size: 12px;
-      opacity: 0.7;
-    }
+    body { background: #0d0d0d; color: #c8c8c8; font-family: monospace; font-size: 12px; margin: 0; padding: 12px; }
+    nav { margin-bottom: 10px; }
+    nav a { color: #5af; text-decoration: none; margin-right: 16px; font-size: 13px; }
+    nav a:hover { text-decoration: underline; }
+    h1 { color: #fff; font-size: 15px; margin: 0 0 4px; }
+    .meta { color: #666; margin-bottom: 8px; font-size: 11px; }
+    pre { white-space: pre-wrap; word-break: break-all; line-height: 1.5; margin: 0; }
+    mark.err  { background: #5a0000; color: #ff6b6b; border-radius: 2px; padding: 0 2px; }
+    mark.warn { background: #3d2e00; color: #ffc94d; border-radius: 2px; padding: 0 2px; }
+    mark.info { background: transparent; color: #888; }
   </style>
 </head>
 <body>
-  <header id="header"><%= title %>
-    <small id="timestamp">Path: <%= log_path %> | Time: <%= time %></small>
-  </header>
-
-  <main>
-    <pre id="log-content"><%= log_lines.join("\n") %></pre>
-  </main>
-
-  <footer>🔄 Auto‑refreshing logs every 5 seconds.</footer>
-
-  <script>
-    function updatePage() {
-      fetch(location.pathname)  // Use current page URL exactly
-        .then(r => {
-          if (!r.ok) throw new Error('Fetch failed');
-          return r.text();
-        })
-        .then(html => {
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(html, 'text/html');
-          
-          // Update header
-          document.getElementById('header').innerHTML = 
-            doc.querySelector('header').innerHTML;
-          
-          // Update log content
-          const logElement = document.getElementById('log-content');
-          const newContent = doc.querySelector('pre').innerHTML;
-
-          logElement.innerHTML = newContent;
-          
-          // Scroll to bottom after update
-          //logElement.scrollTop = logElement.scrollHeight;
-          
-          console.log('✅ Logs updated');
-        })
-        .catch(err => {
-          console.error('❌ Refresh failed:', err);
-        });
-    }
-
-    // Update every 5 seconds
-    setInterval(updatePage, 5000);
-    
-    // Initial scroll to bottom
-    window.addEventListener('load', () => {
-      document.getElementById('log-content').scrollTop = 
-        document.getElementById('log-content').scrollHeight;
-    });
-  </script>
+  <nav>
+    <a href="/">Log</a>
+    <a href="/stats">Stats</a>
+  </nav>
+  <h1><%= title %></h1>
+  <div class="meta">Last updated: <%= time %> &nbsp;|&nbsp; <a href="/">Refresh</a></div>
+  <pre><%= log_lines.join("\n") %></pre>
 </body>
 </html>

@@ -773,12 +773,14 @@ class BybitManager:
                         f"🚫 get_signal | {sym:>8} | Bybit: {bybit_5m_pct:+.2f}% | "
                         f"Coinbase: {coinbase_pct:+.2f}% | Chainlink: {chainlink_pct:+.2f}% | No alignment"
                     )
+                rdb.hincrby(f"stats:trade:{normalize_asset(sym)}", "alignment_fail", 1)
                 return None
             else:
                 logger.debug(
                         f"✓ get_signal | {sym:>8} | Bybit: {bybit_5m_pct:+.2f}% | "
                         f"Coinbase: {coinbase_pct:+.2f}% | Chainlink: {chainlink_pct:+.2f}% | Aligned"
                     )
+                rdb.hincrby(f"stats:trade:{normalize_asset(sym)}", "alignment_pass", 1)
 
                 # Relax side threshold during epoch bias window or BTC lead-lag
                 btc_lag = (
