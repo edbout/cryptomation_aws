@@ -965,7 +965,7 @@ class CoinbaseFeed:
                                 self.update_from_coinbase(product_id, price)
 
             except (websockets.ConnectionClosed, ConnectionResetError) as e:
-                logger.info(f"✗ CoinbaseFeed | closed, reconnecting in 3s: {e}")
+                logger.warning(f"⚠️ CoinbaseFeed | WebSocket disconnected, reconnecting in 3s: {e}")
                 await asyncio.sleep(3)
             except Exception as e:
                 logger.exception(f"✗ CoinbaseFeed | top-level error: {e!r}")
@@ -1098,7 +1098,7 @@ class ChainlinkFeed:
                         self.update_from_chainlink(symbol, price)
 
             except (websockets.ConnectionClosed, ConnectionResetError) as e:
-                logger.info(f"✗ ChainlinkFeed | WebSocket closed, reconnecting in 3s: {e}")
+                logger.warning(f"⚠️ ChainlinkFeed | WebSocket disconnected, reconnecting in 3s: {e}")
                 await asyncio.sleep(3)
             except Exception as e:
                 logger.exception(f"✗ ChainlinkFeed | top-level error: {e!r}")

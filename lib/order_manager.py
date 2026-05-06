@@ -16,7 +16,7 @@ from py_clob_client_v2.exceptions import PolyApiException
 from config import Config, RedisCache
 from price_tracker import PriceTracker
 from lib.polymarket_positions import PolymarketPositionManager
-from lib.helpers import safe_float, get_utc_now, get_seconds_since_5m_start
+from lib.helpers import safe_float, get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts
 
 UTC = ZoneInfo("UTC")
 
@@ -32,6 +32,7 @@ class OrderManager:
         self.redis = RedisCache()
         self.tracker = PriceTracker()
         self._pending_tasks = []
+        self._weak_signal_last_bar: Dict[str, int] = {}  # asset → bar_start of last logged weak signal
 
     def get_direction(self, symbol: str) -> tuple[str, float, float]:
         """Returns ("BUY"/"SELL"/"ERROR", open_price, close_price) for CURRENT 5min candle."""
@@ -939,15 +940,28 @@ class OrderManager:
                 
                 # Execute order based on config
                 if Config.DRY_RUN:
+                    # Guard: same dedup key used by _execute_order in live mode.
+                    # Without this, the 5-second Bybit trigger fires again before the
+                    # first dry order is stored and stacks duplicate positions.
+                    active_asset_key = f"active_{token_id}"
+                    if self.redis.exists(active_asset_key):
+                        logger.debug(f"⏳ safe_place_order {asset} | DRY RUN — active order exists, skipping duplicate")
+                        return None
+                    self.redis.setex(active_asset_key, 300, "1")
+
                     dry_order_id = f"dry_{int(time.time())}_{token_id[-8:]}"
                     logger.info("🧪 DRY %s %s @ %.4f size=%.2f id=%s", token, asset, order_price, size, dry_order_id)
+                    # makingAmount = USDC spent (what we give), takingAmount = shares received.
+                    # Keeping consistent with the live API convention so that
+                    #   order_price = makingAmount / takingAmount = price_per_share
+                    # is calculated correctly downstream in the success handler.
                     response = {
                         "success": True,
                         "result": {
                             "orderID": dry_order_id,
                             "status": "matched",
-                            "makingAmount": str(round(size, 4)),
-                            "takingAmount": str(round(size * order_price, 4)),
+                            "makingAmount": str(round(size * order_price, 4)),  # USDC cost
+                            "takingAmount": str(round(size, 4)),                 # shares received
                         },
                     }
 
@@ -1309,7 +1323,17 @@ class OrderManager:
                     f"TP key set for trailing in manage_positions"
                 )
                 return
-            
+
+            # Dry run: manage_positions is already scheduled above; no real CLOB order needed.
+            # Without this guard the code falls through to client.create_order / post_order
+            # which fails with a balance error and leaves the position unprotected.
+            if Config.DRY_RUN:
+                logger.debug(
+                    f"🧪 place_tp_orders {asset_label:>8} | DRY RUN — TP limit skipped, "
+                    f"manage_positions handles SL/TP via scheduled tasks"
+                )
+                return
+
             tp_price_threshold = min(order_price * 1.18, 0.96)
             tp1_size = max(5.0, round(position_size * 0.5, 0))
             if tp_price_threshold >= Config.PRICE_MAX:
@@ -1471,11 +1495,16 @@ class OrderManager:
             BAR_OPEN_EDGE_SURCHARGE = Config.BAR_OPEN_EDGE_SURCHARGE
 
             if abs(confidence) < BAR_OPEN_MIN_PCT:
-                logger.info(
-                    f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
-                    f"s={candle_seconds} | bar-open weak signal: "
-                    f"|{confidence:.3f}%| < {BAR_OPEN_MIN_PCT}% — skip"
-                )
+                # Suppress repeat logs within the same 5-minute bar — the Bybit trigger
+                # fires every 5s so this would otherwise spam 3-4 identical lines per bar.
+                bar_start = get_current_5m_bar_ts(time.time())
+                if self._weak_signal_last_bar.get(asset) != bar_start:
+                    self._weak_signal_last_bar[asset] = bar_start
+                    logger.info(
+                        f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
+                        f"s={candle_seconds} | bar-open weak signal: "
+                        f"|{confidence:.3f}%| < {BAR_OPEN_MIN_PCT}% — skip"
+                    )
                 return None
 
             # Also require OBI confirmation in bar-open window (no neutral book allowed)
@@ -1570,7 +1599,7 @@ class OrderManager:
         logger.info(
             "%s | %-8s | tm=%d-%3ds | win_rate=%.1f%% | "
             "chg:%+.3f%% | Hist:%6.4f | Now:%6.4f | "
-            "Edge:%+5.1f%% (Need:-%5.1f%%)",
+            "Edge:%+5.1f%% (Need:-%.1f%%)",
             status_icon, asset, trigger_minute, candle_seconds, win_rate,
             confidence, historical_avg, order_price,
             edge_pct, required_edge
