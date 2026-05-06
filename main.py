@@ -738,12 +738,16 @@ class BybitManager:
             else:
                 coinbase_pct = 0.0
 
-            # When Chainlink is fresh, enforce magnitude; when stale, only check direction
+            # When Chainlink is fresh: enforce magnitude, direction, and divergence
+            # When stale: exclude entirely — stale oracle data from a different market
+            # regime actively corrupts the direction vote; Bybit+Coinbase is sufficient
             if chainlink_fresh:
                 chainlink_strong = abs(chainlink_pct) > 0.03
+                use_chainlink_direction = True
             else:
-                logger.debug(f"⚠️ get_signal | {sym} Chainlink stale ({chainlink_age:.0f}s) — direction-only")
-                chainlink_strong = (chainlink_pct != 0.0)  # any direction tick is ok
+                logger.debug(f"⚠️ get_signal | {sym} Chainlink stale ({chainlink_age:.0f}s) — excluded from alignment")
+                chainlink_strong = True          # stale — don't gate on it
+                use_chainlink_direction = False  # stale — don't include in direction vote
 
             strong_enough = (
                 abs(bybit_5m_pct) > 0.03
@@ -751,12 +755,12 @@ class BybitManager:
                 and chainlink_strong
             )
 
-            same_direction = (
-                (bybit_5m_pct > 0) == (chainlink_pct > 0) == (coinbase_pct > 0)
-            )
+            if use_chainlink_direction:
+                same_direction = (bybit_5m_pct > 0) == (chainlink_pct > 0) == (coinbase_pct > 0)
+            else:
+                same_direction = (bybit_5m_pct > 0) == (coinbase_pct > 0)
 
             max_div = max(0.12, abs(bybit_5m_pct) * 0.6)  # relative ±60%, min 0.12%
-            # When Chainlink is stale skip the divergence check for it
             chainlink_div_ok = (not chainlink_fresh) or (abs(bybit_5m_pct - chainlink_pct) <= max_div)
             not_too_far = (
                 chainlink_div_ok
