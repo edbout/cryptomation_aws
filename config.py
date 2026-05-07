@@ -79,21 +79,6 @@ class Config:
     WS_URL = "wss://ws-live-data.polymarket.com"  
     CHAINLINK_FEED = "crypto_prices_chainlink"
 
-    @classmethod
-    def validate(cls):
-        """Validate required config."""
-        if not all([cls.PRIVATE_KEY, cls.PUBLIC_KEY, cls.PROXY_WALLET]):
-            raise ValueError("Missing required keys: PRIVATE_KEY, PUBLIC_KEY, PROXY_WALLET")
-        if cls.PRICE_MIN >= cls.PRICE_MAX:
-            raise ValueError("PRICE_MIN must be < PRICE_MAX")
-        
-        # New validation: ASSETS count must match BYBIT_SYMBOLS
-        if len(cls.ASSETS) != len(cls.BYBIT_SYMBOLS):
-            raise ValueError(
-                f"ASSETS count ({len(cls.ASSETS)}) must match BYBIT_SYMBOLS count ({len(cls.BYBIT_SYMBOLS)}). "
-                f"ASSETS: {cls.ASSETS}, BYBIT_SYMBOLS: {cls.BYBIT_SYMBOLS}"
-            )
-                
 class RedisCache:
     _instance = None
     

@@ -6,7 +6,7 @@ import websockets
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Optional, List, Tuple, Any
 from logging.handlers import TimedRotatingFileHandler
@@ -330,11 +330,6 @@ class BybitCandle5m:
             return 0.0
         return float((c - o) / o * 100)
 
-    def bar_start_utc(self) -> Optional[datetime]:
-        if self._bar_start is None:
-            return None
-        return datetime.fromtimestamp(self._bar_start, tz=timezone.utc)
-    
     def log_volume_status(self, symbol: str, lookback: int = 10):
         """Log full volume status with color indicators."""
         tracker = self.volume_trackers.get(symbol)

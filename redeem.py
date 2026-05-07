@@ -112,16 +112,6 @@ class PolymarketRedeemer:
         if missing:
             raise ValueError(f"Missing env vars: {missing}")
     
-    def check_proxy_wallet(self) -> bool:
-        try:
-            code = self.w3.eth.get_code(self.proxy_wallet)
-            deployed = len(code) > 0
-            logger.debug(f"check_proxy_wallet | Proxy wallet deployed: {'YES' if deployed else 'NO'}")
-            return deployed
-        except Exception as e:
-            logger.error(f"check_proxy_wallet | Proxy check failed: {e}")
-            return False
-    
     def show_active_positions_dashboard(self, min_value: float = 0.01, positions: list = None):
         """Get active positions via shared manager."""
         if positions is None:

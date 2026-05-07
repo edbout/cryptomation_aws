@@ -126,13 +126,8 @@ class PriceTracker:
         }
         
         history_key = f"prices:signals:{asset}"
-        latest_key = f"prices:latest:{asset}"
-        
-        # Atomic pipeline - unchanged core logic
+
         pipe = self.rdb.pipeline()
-        pipe.hset(latest_key, mapping=data)
-        pipe.expire(latest_key, 3600)
-        
         member = f"{candle_seconds}:{price:.6f}:{percentage:.4f}:{direction}:na"
         pipe.zadd(history_key, {member: timestamp})
         pipe.zremrangebyrank(history_key, 0, -10001)  
@@ -146,39 +141,14 @@ class PriceTracker:
                 
         return self.minute_stats(asset, trigger_minute)
 
-    def get_latest(self, asset: str) -> Optional[Dict[str, Any]]:
-        """Safe latest price lookup."""
-        try:
-            data = self.rdb.hgetall(f"prices:latest:{normalize_asset(asset)}")
-            if not data:
-                return None
-
-            result = {}
-            for k, v in data.items():
-                try:
-                    result[k.decode()] = float(v.decode()) if isinstance(v, bytes) and b'.' in v else int(v.decode())
-                except (ValueError, AttributeError):
-                    result[k.decode()] = v.decode() if isinstance(v, bytes) else str(v)
-            return result
-        except Exception:
-            return None
-        
     def get_assets(self, limit: int = 10) -> List[str]:
-        """Raw key parsing - skips normalize_asset()."""
-        history_keys = self.rdb.keys("prices:signals:*")
-        latest_keys = self.rdb.keys("prices:latest:*")
-        
         assets = set()
-        for keys in [history_keys, latest_keys]:
-            for k in keys:
-                try:
-                    # Extract LAST part after final ':'
-                    key_str = k.decode() if isinstance(k, bytes) else k
-                    asset = key_str.split(':')[-1]
-                    assets.add(asset)
-                except:
-                    continue
-        
+        for k in self.rdb.keys("prices:signals:*"):
+            try:
+                key_str = k.decode() if isinstance(k, bytes) else k
+                assets.add(key_str.split(':')[-1])
+            except:
+                continue
         return sorted(list(assets))[:limit]
 
     def get_signal_history(self, asset: str, max_count: int = 10000) -> List[Dict]:
