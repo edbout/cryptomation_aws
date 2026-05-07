@@ -9,8 +9,7 @@ from functools import lru_cache
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
-if os.getenv("HEROKU") != "true":
-    load_dotenv(".env")
+load_dotenv()
 
 import logging
 from web3 import Web3

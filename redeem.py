@@ -19,12 +19,10 @@ UTC = timezone.utc
 
 logger = logging.getLogger(__name__)
 
-# Load .env safely
-if os.getenv("HEROKU") != "true":
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except:
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
         pass
 
 from config import RedisCache

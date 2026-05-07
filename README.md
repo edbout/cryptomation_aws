@@ -6,12 +6,12 @@ Three WebSocket feeds (Bybit inverse futures, Coinbase PERP, Chainlink via Polym
 
 # Key Components
     File	Role
-    [main.py](Cryptomation heroku_python/main.py)	Orchestration, feeds, timer loop
-    [lib/order_manager.py](Cryptomation heroku_python/lib/order_manager.py)	Order placement & approvals
-    [price_tracker.py](Cryptomation heroku_python/price_tracker.py)	Signal recording, stats, fair-value lookups
-    [calibrate_params.py](Cryptomation heroku_python/calibrate_params.py)	Offline parameter tuning
-    [redeem.py](Cryptomation heroku_python/redeem.py)	Position redemption at expiry
-    [config.py](Cryptomation heroku_python/config.py)	Config dataclass + Redis singleton
+    [main.py](Cryptomation AWSn/main.py)	Orchestration, feeds, timer loop
+    [lib/order_manager.py](Cryptomation AWSn/lib/order_manager.py)	Order placement & approvals
+    [price_tracker.py](Cryptomation AWSn/price_tracker.py)	Signal recording, stats, fair-value lookups
+    [calibrate_params.py](Cryptomation AWSn/calibrate_params.py)	Offline parameter tuning
+    [redeem.py](Cryptomation AWSn/redeem.py)	Position redemption at expiry
+    [config.py](Cryptomation AWSn/config.py)	Config dataclass + Redis singleton
 
 # Infrastructure
     Redis Cloud — state, signals, order tracking, stats, caching

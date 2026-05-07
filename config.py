@@ -5,13 +5,11 @@ import time
 
 logger = logging.getLogger(__name__)
 
-# Load .env safely
-if os.getenv("HEROKU") != "true":
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except:
-        pass
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 class Config:
     """Centralized configuration from environment variables (Heroku config vars)."""
