@@ -281,7 +281,8 @@ def load_trades
       verdict:    verdict,
     }
   end.compact
-  trades.sort_by { |t| t[:entry_time] }.reverse
+  trades.select { |t| !t[:pm_out].empty? }
+        .sort_by { |t| t[:entry_time] }.reverse
 end
 
 # ── Routes ────────────────────────────────────────────────────────────────────
