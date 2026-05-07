@@ -94,7 +94,7 @@ end
 
 def load_results
   now = Time.now
-  return $results_cache if $results_cache && (now - $results_cache_ts) < RESULTS_TTL
+  return $results_cache if $results_cache && $results_cache_ts && (now - $results_cache_ts) < RESULTS_TTL
 
   raw_act = poly_fetch(POLY_ACTIVITY)
   raw_pos = poly_fetch(POLY_POSITIONS)
@@ -299,7 +299,10 @@ get '/stats' do
 end
 
 get '/results' do
-  $results_cache_ts = nil if params[:refresh]
+  if params[:refresh]
+    $results_cache    = nil
+    $results_cache_ts = nil
+  end
   data   = load_results
   trades = load_trades
   erb :results, locals: { data: data, start_date: RESULTS_START.to_s, trades: trades }
