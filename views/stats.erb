@@ -91,5 +91,40 @@
     </tbody>
   </table>
   <% end %>
+
+  <h2 style="color:#aaa;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:28px 0 8px;border-top:1px solid #1e1e1e;padding-top:16px;">Signal History (Redis)</h2>
+  <p style="color:#555;font-size:10px;margin:0 0 8px">
+    <code>prices:signals</code> — written only when a trade is approved (used for win rate &amp; edge backtest).
+    <code>prices:fairvalue</code> — written unconditionally every 30 s (used for fair value reference).
+    <em>records updated: 0</em> in the log is normal for bars with no trade.
+  </p>
+  <% if stats.empty? %>
+    <div class="empty">No data yet.</div>
+  <% else %>
+  <table>
+    <thead>
+      <tr>
+        <th>Asset</th>
+        <th>Signals total</th>
+        <th>Pending (:na)</th>
+        <th>Fairvalue total</th>
+        <th>Should trade?</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% stats.each do |asset, s| %>
+      <tr>
+        <td class="asset"><%= asset %></td>
+        <td class="<%= s[:sig_total] > 50 ? 'good' : 'bad' %>"><%= s[:sig_total] %></td>
+        <td class="<%= s[:sig_na] > 0 ? 'warn' : 'dim' %>"><%= s[:sig_na] %></td>
+        <td class="<%= s[:fv_total] > 0 ? 'good' : 'bad' %>"><%= s[:fv_total] %></td>
+        <td class="<%= s[:sig_total] > 50 ? 'good' : 'bad' %>">
+          <%= s[:sig_total] > 50 ? 'YES (>50 records)' : "NO (need #{[51 - s[:sig_total], 0].max} more)" %>
+        </td>
+      </tr>
+      <% end %>
+    </tbody>
+  </table>
+  <% end %>
 </body>
 </html>
