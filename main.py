@@ -36,9 +36,10 @@ def setup_logging() -> None:
     logger.addHandler(console_handler)
 
     # Local dev file logging with hourly rotation
-    from dotenv import load_dotenv
-    load_dotenv()
-    os.makedirs("./log", exist_ok=True)
+    if os.getenv("HEROKU") != "true":
+        from dotenv import load_dotenv
+        load_dotenv()
+        os.makedirs("./log", exist_ok=True)
 
         file_handler = TimedRotatingFileHandler(
             filename="./log/bot.log",

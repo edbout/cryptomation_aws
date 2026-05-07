@@ -296,8 +296,8 @@ get '/stats' do
     closed  = tp + sl + trail + expiry
     win_rate = closed > 0 ? (correct.to_f / closed * 100).round(1) : nil
 
-    sig_key = "prices:signals:#{asset.downcase}"
-    fv_key  = "prices:fairvalue:#{asset.downcase}"
+    sig_key = "prices:signals:#{asset}"
+    fv_key  = "prices:fairvalue:#{asset}"
     sig_total   = rdb.zcard(sig_key).to_i
     sig_pending = rdb.zcount(sig_key, '-inf', '+inf').to_i  # all; pending = ending :na
     # count members ending in :na via zrangebyscore scan (approximate via ZSCAN pattern)
