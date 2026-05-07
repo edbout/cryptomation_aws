@@ -224,10 +224,17 @@ class BybitCandle5m:
                             symbol, member, new_member, old_ts, now.timestamp())
         if updated:
             pipe.execute()
-            logger.debug("🔄 update_outcomes | %s: Updated %d/%d records → outcome=%s", 
+            logger.debug("🔄 update_outcomes | %s: Updated %d/%d records → outcome=%s",
                     symbol, updated, len(cur_members), outcome)
-            
-        return len(cur_members)                
+
+        # Remove stale :na records from bars before the current window (bot restarts / crashes)
+        stale = self.redis.zrangebyscore(history_key, '-inf', window_start - 1)
+        stale_na = [m for m in stale if m.endswith(':na')]
+        if stale_na:
+            self.redis.zrem(history_key, *stale_na)
+            logger.info("🧹 update_outcomes | %s: Removed %d stale :na records", symbol, len(stale_na))
+
+        return len(cur_members)
 
     def on_stream_tick(self, symbol: str, volume_delta: float, timestamp: float):
         if symbol not in self.volume_trackers:

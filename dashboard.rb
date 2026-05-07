@@ -263,7 +263,7 @@ end
 # ── Routes ────────────────────────────────────────────────────────────────────
 get '/' do
   lines       = read_log_lines(1000)
-  highlighted = styled_log_lines(lines)
+  highlighted = styled_log_lines(lines).reverse
   erb :index, locals: {
     title:     'Polymarket Bot Log',
     log_lines: highlighted,
