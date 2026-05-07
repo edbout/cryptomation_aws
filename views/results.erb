@@ -200,7 +200,6 @@
       <tbody>
         <% trades.each do |t| %>
         <%
-          def dir_cls(d); d == 'UP' ? 'pos' : (d.empty? ? 'dim' : 'neg'); end
           slug_short = t[:market_slug].length > 34 ? t[:market_slug][0, 34] + '…' : t[:market_slug]
           v = t[:verdict]
           v_cls = v.nil? ? 'dim' : (v.start_with?('WIN') ? 'pos' : 'neg')

@@ -18,6 +18,12 @@ set :bind, HOST
 set :port, PORT
 disable :logging
 
+helpers do
+  def dir_cls(d)
+    d == 'UP' ? 'pos' : (d.empty? ? 'dim' : 'neg')
+  end
+end
+
 # ── Redis ────────────────────────────────────────────────────────────────────
 def rdb
   @rdb ||= Redis.new(url: ENV.fetch('REDISCLOUD_URL', 'redis://localhost:6379'))
