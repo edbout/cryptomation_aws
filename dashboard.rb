@@ -230,31 +230,49 @@ def load_trades
     # Skip old/malformed orders — valid Polymarket token prices are always 0–1
     next nil unless entry_price > 0 && entry_price < 1
 
-    asset    = (all['asset'] || d['asset']).to_s.upcase
-    side     = d['side'].to_s.upcase
-    pm_out   = all['polymarket_direction'].to_s.upcase
-    won      = !pm_out.empty? && side == pm_out
-    # 'created_at' is the current field name; 'entry_time' kept as fallback for older records
-    raw_time = (d['created_at'] || d['entry_time']).to_s
+    asset      = (all['asset'] || d['asset']).to_s.upcase
+    side       = d['side'].to_s.upcase
+    raw_time   = (d['created_at'] || d['entry_time']).to_s
     entry_time = raw_time[0, 19].tr('T', ' ')
 
+    # WebSocket consensus (Bybit/Coinbase/Chainlink) — written at bar close
+    bar_dir  = all['bar_direction'].to_s.upcase   # UP / DOWN
+    bar_pct  = all['bar_pct'].to_f
+    bar_cb   = all['bar_coinbase'].to_s.upcase
+    bar_cl   = all['bar_chainlink'].to_s.upcase
+    bar_con  = all['bar_consensus'].to_s.upcase   # consensus direction
+    bar_agree = all['bar_agree'].to_s             # e.g. "2/3"
+
+    # Polymarket final verdict (token resolution)
+    pm_out    = all['polymarket_direction'].to_s.upcase
+    pm_pct    = all['polymarket_pct'].to_f
+    pm_status = all['polymarket_status'].to_s
+
+    # WIN/LOSS: compare side vs Polymarket outcome (final truth); fall back to consensus
+    verdict = if !pm_out.empty?
+      (side == 'YES') == (pm_out == 'YES') ? 'WIN' : 'LOSS'
+    elsif !bar_con.empty?
+      ((side == 'YES') == (bar_con == 'UP')) ? 'WIN~' : 'LOSS~'
+    end
+
     {
-      order_id:    d['order_id'].to_s,
-      asset:       asset,
-      side:        side,
+      order_id:   d['order_id'].to_s,
+      asset:      asset,
+      side:       side,
       entry_price: entry_price,
-      size:        d['size'].to_f.round(2),
-      entry_time:  entry_time,
+      size:       d['size'].to_f.round(2),
+      entry_time: entry_time,
       market_slug: (all['market_slug'] || d['market_slug']).to_s,
-      # Exchange outcome
-      ex_direction: all['exchange_direction'].to_s.upcase,
-      ex_diff_pct:  all['exchange_diff_pct'].to_f,
-      ex_status:    all['exchange_status'].to_s,
-      # Polymarket outcome
-      pm_outcome:  pm_out,
-      pm_pct:      all['polymarket_pct'].to_f,
-      pm_status:   all['polymarket_status'].to_s,
-      won:         won,
+      bar_dir:    bar_dir,
+      bar_pct:    bar_pct,
+      bar_cb:     bar_cb,
+      bar_cl:     bar_cl,
+      bar_con:    bar_con,
+      bar_agree:  bar_agree,
+      pm_out:     pm_out,
+      pm_pct:     pm_pct,
+      pm_status:  pm_status,
+      verdict:    verdict,
     }
   end.compact
   trades.sort_by { |t| t[:entry_time] }.reverse

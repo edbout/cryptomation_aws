@@ -1723,15 +1723,15 @@ class OrderManager:
             except Exception as _e:
                 logger.warning(f"🧪 dryrun tracking write failed: {_e}")
 
-        # Schedule outcome fetches OUTSIDE try/except so Redis errors can't prevent them
+        # Register order in pending-outcome index so _update_order_outcomes (main.py) can
+        # find it at the next bar close and write Bybit/Coinbase/Chainlink consensus.
+        bar_start = get_current_5m_bar_ts(time.time())
+        pending_key = f"orders:pending_outcome:{asset}"
+        self.redis.zadd(pending_key, {order_id: bar_start})
+        self.redis.expire(pending_key, 30 * 24 * 3600)
+
+        # Schedule Polymarket outcome (final truth — token resolution price)
         delay = (5 - (datetime.now().minute % 5)) * 60
-
-        self.schedule_once(
-            lambda oid=order_id, ms=market_slug, a=asset: self.exchange_order_outcome(oid, ms, a),
-            delay,
-        )
-        logger.debug(f"store_order_permanent | Scheduled exchange_order_outcome for {order_id[:8]} in {delay}s")
-
         self.schedule_once(
             lambda oid=order_id, tid=token_id, ms=market_slug, a=asset, si=side, p=price:
                 self.polymarket_order_outcome(oid, tid, ms, a, si, p),
@@ -1739,60 +1739,6 @@ class OrderManager:
         )
         logger.debug(f"store_order_permanent | Scheduled polymarket_order_outcome for {order_id[:8]} in {delay}s")
 
-    async def exchange_order_outcome(
-        self,
-        order_id: str, 
-        market_slug: str, 
-        asset: str
-    ) -> bool:
-        order_key = f"order:{order_id}"
-        
-        try:
-            raw_data = self.get_direction(asset)
-            # Unpack safely (handle if not exactly 3 items)
-            if len(raw_data) != 3:
-                logger.warning(f"exchange_order_outcome {asset} | Invalid data length {len(raw_data)}: {raw_data}")
-                return False
-            direction, open_price_raw, close_price_raw = raw_data
-            
-            open_price = safe_float(open_price_raw)
-            close_price = safe_float(close_price_raw)
-            
-            # Validate after conversion
-            if not (0 < open_price <= 1000000 and 0 < close_price <= 1000000):
-                logger.warning(f"exchange_order_outcome {asset} | Invalid prices: O={open_price}, C={close_price}")
-                return False
-            
-            price_diff = close_price - open_price
-            diff_pct = (price_diff / open_price) * 100 if open_price > 0 else 0
-            
-            # Cache
-            self.redis.hset(order_key, mapping={
-                "exchange_close_price": close_price,
-                "exchange_open_price": open_price,
-                "exchange_direction": direction,
-                "exchange_diff": round(price_diff, 6),
-                "exchange_diff_pct": round(diff_pct, 2),
-                "exchange_status": "outcome",
-                "exchange_updated_at": int(time.time()),
-                "market_slug": market_slug,
-                "asset": asset,
-                "signal_strength": abs(round(diff_pct, 1))
-            })
-            self.redis.expire(order_key, 3600*24*30)
-
-            logger.info(
-                f"✓ exchange_order_outcome {asset} | {direction} | "
-                f"O:{open_price:.4f}→C:{close_price:.4f} | "
-                f"{diff_pct:+.2f}% ({price_diff:+.3f})"
-            )
-            return True
-            
-        except Exception as e:
-            logger.error(f"✗ exchange_order_outcome {asset} | {order_id[:8]} failed: {e}")
-            self.redis.hset(order_key, "exchange_status", "failed")
-            return False
-        
     async def polymarket_order_outcome(
         self,
         order_id: str,

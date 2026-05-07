@@ -183,26 +183,28 @@
     <table>
       <thead>
         <tr>
-          <th>Time (UTC)</th>
-          <th>Asset</th>
-          <th>Side</th>
-          <th>Entry</th>
-          <th>Size</th>
-          <th>Exch Dir</th>
-          <th>Exch Δ%</th>
-          <th>PM Out</th>
-          <th>PM Δ%</th>
-          <th>Result</th>
-          <th>Market</th>
+          <th>Time (UTC)</th><th>Asset</th><th>Side</th><th>Entry</th><th>Size</th>
+          <th colspan="3" style="text-align:center;border-left:1px solid #2a2a2a">WebSocket consensus</th>
+          <th style="border-left:1px solid #2a2a2a">Agree</th>
+          <th colspan="2" style="text-align:center;border-left:1px solid #2a2a2a">Polymarket (final)</th>
+          <th>Result</th><th>Market</th>
+        </tr>
+        <tr>
+          <th></th><th></th><th></th><th></th><th></th>
+          <th style="border-left:1px solid #2a2a2a">Bybit</th><th>CB</th><th>CL</th>
+          <th style="border-left:1px solid #2a2a2a"></th>
+          <th style="border-left:1px solid #2a2a2a">Out</th><th>Δ%</th>
+          <th></th><th></th>
         </tr>
       </thead>
       <tbody>
         <% trades.each do |t| %>
         <%
-          pending = t[:pm_status].empty? || t[:pm_status] == 'failed'
-          result_cls = pending ? 'dim' : (t[:won] ? 'pos' : 'neg')
-          result_lbl = pending ? '…' : (t[:won] ? 'WIN' : 'LOSS')
-          slug_short = t[:market_slug].length > 38 ? t[:market_slug][0, 38] + '…' : t[:market_slug]
+          def dir_cls(d); d == 'UP' ? 'pos' : (d.empty? ? 'dim' : 'neg'); end
+          slug_short = t[:market_slug].length > 34 ? t[:market_slug][0, 34] + '…' : t[:market_slug]
+          v = t[:verdict]
+          v_cls = v.nil? ? 'dim' : (v.start_with?('WIN') ? 'pos' : 'neg')
+          v_lbl = v.nil? ? '…' : v
         %>
         <tr>
           <td class="dim"><%= t[:entry_time] %></td>
@@ -210,24 +212,26 @@
           <td class="<%= t[:side] == 'YES' ? 'pos' : 'warn' %>"><%= t[:side] %></td>
           <td><%= t[:entry_price].round(3) %></td>
           <td class="dim"><%= t[:size] %></td>
-          <td class="<%= t[:ex_direction] == 'UP' ? 'pos' : (t[:ex_direction].empty? ? 'dim' : 'neg') %>">
-            <%= t[:ex_direction].empty? ? '—' : t[:ex_direction] %>
+          <%# WebSocket consensus %>
+          <td class="<%= dir_cls(t[:bar_dir]) %>" style="border-left:1px solid #1e1e1e">
+            <%= t[:bar_dir].empty? ? '—' : "#{t[:bar_dir]} #{t[:bar_pct] >= 0 ? '+' : ''}#{t[:bar_pct]}%" %>
           </td>
-          <td class="<%= t[:ex_diff_pct] >= 0 ? 'pos' : 'neg' %>">
-            <% if t[:ex_status].empty? %>—<% else %><%= t[:ex_diff_pct] >= 0 ? '+' : '' %><%= t[:ex_diff_pct] %>%<% end %>
-          </td>
-          <td class="<%= t[:pm_outcome] == 'YES' ? 'pos' : (t[:pm_outcome].empty? ? 'dim' : 'neg') %>">
-            <%= t[:pm_outcome].empty? ? '—' : t[:pm_outcome] %>
+          <td class="<%= dir_cls(t[:bar_cb]) %>"><%= t[:bar_cb].empty? ? '—' : t[:bar_cb] %></td>
+          <td class="<%= dir_cls(t[:bar_cl]) %>"><%= t[:bar_cl].empty? ? '—' : t[:bar_cl] %></td>
+          <td class="dim" style="border-left:1px solid #1e1e1e"><%= t[:bar_agree].empty? ? '—' : t[:bar_agree] %></td>
+          <%# Polymarket final %>
+          <td class="<%= t[:pm_out] == 'YES' ? 'pos' : (t[:pm_out].empty? ? 'dim' : 'neg') %>" style="border-left:1px solid #1e1e1e">
+            <%= t[:pm_out].empty? ? '—' : t[:pm_out] %>
           </td>
           <td class="<%= t[:pm_pct] >= 0 ? 'pos' : 'neg' %>">
             <% if t[:pm_status].empty? %>—<% else %><%= t[:pm_pct] >= 0 ? '+' : '' %><%= t[:pm_pct] %>%<% end %>
           </td>
-          <td class="<%= result_cls %>"><strong><%= result_lbl %></strong></td>
+          <td class="<%= v_cls %>"><strong><%= v_lbl %></strong></td>
           <td class="dim" style="font-size:10px"><%= slug_short %></td>
         </tr>
         <% end %>
         <% if trades.empty? %>
-        <tr><td colspan="11" style="color:#333;text-align:center;padding:20px">No orders in Redis</td></tr>
+        <tr><td colspan="13" style="color:#333;text-align:center;padding:20px">No orders in Redis</td></tr>
         <% end %>
       </tbody>
     </table>

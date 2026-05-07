@@ -172,7 +172,8 @@ class BybitCandle5m:
                 old_change = self._pct_change()
                 direction = "🟢   UP" if old_change > 0 else "🔴 DOWN" if old_change < 0 else "⚪ FLAT"                
                 outcome = 'up' if old_change > 0 else 'down'                
-                records = self._update_outcomes(symbol, outcome)                
+                records = self._update_outcomes(symbol, outcome)
+                self._update_order_outcomes(symbol, old_change, self.candle["start_bar_ts"])
                 logger.info(
                     f"🔄 update_from_bybit     | {direction} | {symbol:>9} | {old_change:+.3f}% | {price:10.4f} | {bar_start} | records updated: {records}"
                 )
@@ -199,10 +200,17 @@ class BybitCandle5m:
         cur_members = self.redis.zrangebyscore(history_key, window_start, now_ts)
         logger.debug("🔄 update_outcomes | %s FLIP → outcome=%s | total=%d cur=%d", symbol, outcome, total, len(cur_members))
         
+        # Remove stale :na records from bars before the current window (bot restarts / crashes)
+        stale = self.redis.zrangebyscore(history_key, '-inf', window_start - 1)
+        stale_na = [m for m in stale if m.endswith(':na')]
+        if stale_na:
+            self.redis.zrem(history_key, *stale_na)
+            logger.info("🧹 update_outcomes | %s: Removed %d stale :na records", symbol, len(stale_na))
+
         if not cur_members:
             logger.debug("⏳ update_outcomes | %s: No current records yet (need record_signal() signals)", symbol)
             return 0
-        
+
         pipe = self.redis.pipeline()
         updated = 0
         
@@ -227,14 +235,64 @@ class BybitCandle5m:
             logger.debug("🔄 update_outcomes | %s: Updated %d/%d records → outcome=%s",
                     symbol, updated, len(cur_members), outcome)
 
-        # Remove stale :na records from bars before the current window (bot restarts / crashes)
-        stale = self.redis.zrangebyscore(history_key, '-inf', window_start - 1)
-        stale_na = [m for m in stale if m.endswith(':na')]
-        if stale_na:
-            self.redis.zrem(history_key, *stale_na)
-            logger.info("🧹 update_outcomes | %s: Removed %d stale :na records", symbol, len(stale_na))
-
         return len(cur_members)
+
+    def _update_order_outcomes(self, symbol: str, bar_pct: float, bar_start_ts: int):
+        """Write Bybit/Coinbase/Chainlink consensus direction to orders placed during the closed bar."""
+        asset = normalize_asset(symbol)
+        pending_key = f"orders:pending_outcome:{asset}"
+        order_ids = self.redis.zrangebyscore(pending_key, bar_start_ts, bar_start_ts)
+        if not order_ids:
+            return
+
+        bybit_dir = 'UP' if bar_pct > 0 else 'DOWN'
+        directions = [bybit_dir]
+        coinbase_dir = ''
+        chainlink_dir = ''
+
+        try:
+            global BYBIT_MANAGER
+            if BYBIT_MANAGER is not None:
+                # Coinbase: BTCUSD → BTC-PERP
+                cb_sym = symbol.replace('USD', '') + '-PERP'
+                cb_cur  = BYBIT_MANAGER.coinbase_feed.last_prices.get(cb_sym, 0.0)
+                cb_base = BYBIT_MANAGER.coinbase_feed.coinbase_5m_bases.get(cb_sym, 0.0)
+                if cb_cur > 0 and cb_base > 0:
+                    cb_pct = (cb_cur - cb_base) / cb_base * 100
+                    coinbase_dir = 'UP' if cb_pct > 0 else 'DOWN'
+                    directions.append(coinbase_dir)
+
+                # Chainlink: BTCUSD → btc/usd
+                cl_sym = symbol.replace('USD', '').lower() + '/usd'
+                cl_cur  = BYBIT_MANAGER.chainlink_feed.last_prices.get(cl_sym, 0.0)
+                cl_base = BYBIT_MANAGER.chainlink_feed.chainlink_5m_bases.get(cl_sym, 0.0)
+                if cl_cur > 0 and cl_base > 0:
+                    cl_pct = (cl_cur - cl_base) / cl_base * 100
+                    chainlink_dir = 'UP' if cl_pct > 0 else 'DOWN'
+                    directions.append(chainlink_dir)
+        except Exception as e:
+            logger.debug("_update_order_outcomes | feed access failed: %s", e)
+
+        consensus = max(set(directions), key=directions.count)
+        agree = f"{directions.count(consensus)}/{len(directions)}"
+
+        now_ts = int(time.time())
+        for order_id in order_ids:
+            self.redis.hset(f"order:{order_id}", mapping={
+                'bar_direction':  bybit_dir,
+                'bar_pct':        round(bar_pct, 3),
+                'bar_coinbase':   coinbase_dir,
+                'bar_chainlink':  chainlink_dir,
+                'bar_consensus':  consensus,
+                'bar_agree':      agree,
+                'bar_updated_at': now_ts,
+            })
+            logger.info(
+                "📊 update_order_outcomes | %s | %s → %s (bybit) | CB:%s CL:%s | consensus:%s %s",
+                asset, order_id[:8], bybit_dir, coinbase_dir or '?', chainlink_dir or '?', consensus, agree
+            )
+
+        self.redis.zrem(pending_key, *order_ids)
 
     def on_stream_tick(self, symbol: str, volume_delta: float, timestamp: float):
         if symbol not in self.volume_trackers:
