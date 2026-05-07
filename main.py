@@ -41,12 +41,11 @@ def setup_logging() -> None:
         load_dotenv()
         os.makedirs("./log", exist_ok=True)
 
-        # Hourly rotation: bot.log -> bot.log.YYYY-MM-DD_HH
         file_handler = TimedRotatingFileHandler(
             filename="./log/bot.log",
-            when="H",              # rotate every hour
-            interval=1,            # 1 hour
-            backupCount=24,        # keep 24 hourly files (1 day)
+            when="midnight",      # Rotate at midnight (daily)
+            interval=1,
+            backupCount=7,        # Keep 7 days
             encoding="utf-8",
         )
         file_handler.setLevel(logging.DEBUG)

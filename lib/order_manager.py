@@ -1986,7 +1986,23 @@ class OrderManager:
                     logger.debug(f"⚠️ Manage positions {asset} | counter-signal check failed: {cs_err}")
 
                 # Close triggers (in priority order)
-                if current_price >= tp_price_target:
+
+                # Highest priority: force-close within 20s of bar expiry.
+                # Binary markets resolve instantly at bar end — holding to resolution
+                # means the losing token collapses to ~0.01 with no exit possible.
+                seconds_to_expiry = 300 - get_seconds_since_5m_start(time.time())
+                if seconds_to_expiry <= 20:
+                    logger.info(
+                        f"⏰ Manage positions {asset} EXPIRY CLOSE | {seconds_to_expiry:.0f}s to bar end | "
+                        f"pnl={pnl_pct:+.1f}% | Closing {market_slug} before resolution"
+                    )
+                    self.redis.hincrby(f"stats:trade:{asset}", "expiry_close", 1)
+                    if pnl_pct > 0:
+                        self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
+                    await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="expiry")
+                    return
+
+                elif current_price >= tp_price_target:
                     logger.info(f"🟢 Manage positions {asset} TP HIT price={current_price:.3f} >= {tp_price_target:.3f} | Closing {market_slug}")
                     self.redis.hincrby(f"stats:trade:{asset}", "tp", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
@@ -1995,7 +2011,7 @@ class OrderManager:
 
                 elif pnl_pct <= -sl_pct:
                     logger.info(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (<= -{sl_pct:.1f}%) | Closing {market_slug}")
-                    self.redis.hincrby(f"stats:trade:{asset}", "sl", 1)                   
+                    self.redis.hincrby(f"stats:trade:{asset}", "sl", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="sl")
                     return
 

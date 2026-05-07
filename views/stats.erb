@@ -18,6 +18,7 @@
     .asset { color: #fff; font-weight: bold; }
     .good { color: #4caf50; }
     .bad  { color: #f44336; }
+    .warn { color: #ffc94d; }
     .dim  { color: #555; }
     .group { background: #111; color: #666; font-size: 10px; padding: 3px 10px; letter-spacing: 1px; text-transform: uppercase; }
     .rate { font-size: 11px; }
@@ -47,7 +48,7 @@
       <tr>
         <th>Pass</th><th>Fail</th><th>Rate</th>
         <th>Placed</th><th>Fail</th><th>Rate</th>
-        <th>TP</th><th>SL</th><th>Trail</th><th>Correct</th>
+        <th>TP</th><th>SL</th><th>Trail</th><th>Expiry</th><th>Correct</th>
       </tr>
     </thead>
     <tbody>
@@ -56,23 +57,24 @@
         <td class="asset"><%= asset %></td>
 
         <%# Alignment %>
-        <td class="good"><%= s[:alignment_pass] > 0 ? s[:alignment_pass] : '<span class="dim">0</span>'.html_safe %></td>
+        <td class="<%= s[:alignment_pass] > 0 ? 'good' : 'dim' %>"><%= s[:alignment_pass] %></td>
         <td class="<%= s[:alignment_fail] > 0 ? 'bad' : 'dim' %>"><%= s[:alignment_fail] %></td>
         <td class="rate <%= s[:alignment_rate] && s[:alignment_rate] >= 50 ? 'good' : 'bad' %>">
           <%= s[:alignment_rate] ? "#{s[:alignment_rate]}%" : '—' %>
         </td>
 
         <%# CLOB %>
-        <td class="good"><%= s[:order_placed] > 0 ? s[:order_placed] : '<span class="dim">0</span>'.html_safe %></td>
+        <td class="<%= s[:order_placed] > 0 ? 'good' : 'dim' %>"><%= s[:order_placed] %></td>
         <td class="<%= s[:clob_fail] > 0 ? 'bad' : 'dim' %>"><%= s[:clob_fail] %></td>
         <td class="rate <%= s[:clob_rate] && s[:clob_rate] >= 50 ? 'good' : 'bad' %>">
           <%= s[:clob_rate] ? "#{s[:clob_rate]}%" : '—' %>
         </td>
 
         <%# Outcome %>
-        <td class="good"><%= s[:tp] > 0 ? s[:tp] : '<span class="dim">0</span>'.html_safe %></td>
+        <td class="<%= s[:tp] > 0 ? 'good' : 'dim' %>"><%= s[:tp] %></td>
         <td class="<%= s[:sl] > 0 ? 'bad' : 'dim' %>"><%= s[:sl] %></td>
-        <td><%= s[:trail_stop] > 0 ? s[:trail_stop] : '<span class="dim">0</span>'.html_safe %></td>
+        <td class="<%= s[:trail_stop] > 0 ? 'good' : 'dim' %>"><%= s[:trail_stop] %></td>
+        <td class="<%= s[:expiry_close] > 0 ? 'warn' : 'dim' %>"><%= s[:expiry_close] %></td>
         <td><%= s[:correct] %></td>
 
         <%# Win Rate %>

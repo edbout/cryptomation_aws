@@ -68,8 +68,9 @@ get '/stats' do
     tp      = raw['tp'].to_i
     sl      = raw['sl'].to_i
     trail   = raw['trail_stop'].to_i
+    expiry  = raw['expiry_close'].to_i
     correct = raw['correct_direction'].to_i
-    closed  = tp + sl + trail
+    closed  = tp + sl + trail + expiry
     win_rate = closed > 0 ? (correct.to_f / closed * 100).round(1) : nil
 
     h[asset] = {
@@ -82,6 +83,7 @@ get '/stats' do
       tp:             tp,
       sl:             sl,
       trail_stop:     trail,
+      expiry_close:   expiry,
       correct:        correct,
       closed:         closed,
       win_rate:       win_rate
