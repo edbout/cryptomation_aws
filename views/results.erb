@@ -1,0 +1,213 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Results</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { background: #0d0d0d; color: #c8c8c8; font-family: monospace; font-size: 12px; margin: 0; padding: 12px 16px; }
+    nav { margin-bottom: 14px; }
+    nav a { color: #5af; text-decoration: none; margin-right: 16px; font-size: 13px; }
+    nav a:hover { text-decoration: underline; }
+    h1 { color: #fff; font-size: 15px; margin: 0 0 2px; }
+    .meta { color: #555; font-size: 11px; margin-bottom: 18px; }
+    .meta a { color: #5af; text-decoration: none; }
+    h2 { color: #aaa; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; margin: 24px 0 8px; border-bottom: 1px solid #1e1e1e; padding-bottom: 4px; }
+    .cards { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+    .card  { background: #131313; border: 1px solid #222; border-radius: 6px; padding: 12px 18px; min-width: 140px; flex: 1; }
+    .card .label { color: #555; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+    .card .value { color: #fff; font-size: 18px; font-weight: bold; }
+    .card .value.pos { color: #4caf50; }
+    .card .value.neg { color: #f44336; }
+    .card .value.neu { color: #888; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 4px; }
+    th { background: #141414; color: #666; text-align: left; padding: 5px 10px; font-size: 10px; letter-spacing: 0.5px; text-transform: uppercase; border-bottom: 1px solid #2a2a2a; }
+    td { padding: 5px 10px; border-bottom: 1px solid #181818; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #111; }
+    .sym  { color: #fff; font-weight: bold; }
+    .pos  { color: #4caf50; }
+    .neg  { color: #f44336; }
+    .neu  { color: #888; }
+    .dim  { color: #444; }
+    .warn { color: #ffc94d; }
+    .pnl-bar-wrap { display: flex; align-items: center; gap: 6px; }
+    .pnl-bar { height: 6px; border-radius: 3px; min-width: 2px; }
+    .pnl-bar.pos { background: #4caf50; }
+    .pnl-bar.neg { background: #f44336; }
+    details summary { cursor: pointer; color: #5af; font-size: 11px; margin-bottom: 6px; list-style: none; outline: none; }
+    details summary::-webkit-details-marker { display: none; }
+    details summary::before { content: "▶ "; font-size: 9px; }
+    details[open] summary::before { content: "▼ "; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="/">Log</a>
+    <a href="/stats">Stats</a>
+    <a href="/results">Results</a>
+  </nav>
+
+  <h1>Trading Results</h1>
+  <div class="meta">
+    From <%= start_date %> &nbsp;|&nbsp;
+    Fetched at <%= data[:fetched_at] %> &nbsp;|&nbsp;
+    <a href="/results?refresh=1">↻ Refresh</a>
+    <span class="dim">&nbsp;(cached 5 min)</span>
+  </div>
+
+  <%
+    t        = data[:totals]
+    pnl_cls  = t[:pnl] >= 0 ? "pos" : "neg"
+    tpnl_cls = t[:total_pnl] >= 0 ? "pos" : "neg"
+  %>
+
+  <div class="cards">
+    <div class="card">
+      <div class="label">Realized PnL</div>
+      <div class="value <%= pnl_cls %>"><%= t[:pnl] >= 0 ? "+" : "" %>$<%= t[:pnl].abs %></div>
+    </div>
+    <div class="card">
+      <div class="label">Total Bought</div>
+      <div class="value neu">$<%= t[:bought] %></div>
+    </div>
+    <div class="card">
+      <div class="label">Total Sold</div>
+      <div class="value neu">$<%= t[:sold] %></div>
+    </div>
+    <div class="card">
+      <div class="label">Redeemed</div>
+      <div class="value pos">$<%= t[:redeemed] %></div>
+    </div>
+    <% if t[:open_count] > 0 %>
+    <div class="card">
+      <div class="label">Unrealized PnL</div>
+      <div class="value <%= t[:unrealized] >= 0 ? "pos" : "neg" %>">
+        <%= t[:unrealized] >= 0 ? "+" : "" %>$<%= t[:unrealized].abs %>
+      </div>
+    </div>
+    <div class="card">
+      <div class="label">Total PnL</div>
+      <div class="value <%= tpnl_cls %>"><%= t[:total_pnl] >= 0 ? "+" : "" %>$<%= t[:total_pnl].abs %></div>
+    </div>
+    <% end %>
+  </div>
+
+  <h2>By Symbol</h2>
+  <% max_abs_pnl = [data[:overall].values.map { |v| v[:net_pnl].abs }.max || 1, 1].max %>
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Trades</th><th>Bought</th><th>Sold</th>
+        <th>Redeemed</th><th>Net PnL</th><th>ROI</th><th style="width:120px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      <% data[:overall].each do |sym, s| %>
+      <tr>
+        <td class="sym"><%= sym %></td>
+        <td><%= s[:trades] %></td>
+        <td class="dim">$<%= s[:bought] %></td>
+        <td class="dim">$<%= s[:sold] %></td>
+        <td class="<%= s[:redeemed] > 0 ? "pos" : "dim" %>">$<%= s[:redeemed] %></td>
+        <td class="<%= s[:net_pnl] >= 0 ? "pos" : "neg" %>">
+          <%= s[:net_pnl] >= 0 ? "+" : "" %>$<%= s[:net_pnl].abs %>
+        </td>
+        <td class="<%= s[:roi] && s[:roi] >= 0 ? "pos" : "neg" %>">
+          <%= s[:roi] ? "#{s[:roi]}%" : "—" %>
+        </td>
+        <td>
+          <div class="pnl-bar-wrap">
+            <div class="pnl-bar <%= s[:net_pnl] >= 0 ? "pos" : "neg" %>"
+                 style="width:<%= [(s[:net_pnl].abs / max_abs_pnl * 100).round, 2].max %>px"></div>
+          </div>
+        </td>
+      </tr>
+      <% end %>
+      <% if data[:overall].empty? %>
+      <tr><td colspan="8" style="color:#333;text-align:center;padding:20px">No data yet</td></tr>
+      <% end %>
+    </tbody>
+  </table>
+
+  <h2>Open Positions</h2>
+  <% if data[:positions].empty? %>
+    <div class="dim" style="padding:8px 0">No open positions.</div>
+  <% else %>
+  <table>
+    <thead>
+      <tr><th>Symbol</th><th>Count</th><th>Value</th><th>Unrealized PnL</th><th>Redeemable</th></tr>
+    </thead>
+    <tbody>
+      <% data[:positions].each do |sym, p| %>
+      <tr>
+        <td class="sym"><%= sym %></td>
+        <td><%= p[:count] %></td>
+        <td class="pos">$<%= p[:cur_value] %></td>
+        <td class="<%= p[:unrealized] >= 0 ? "pos" : "neg" %>">
+          <%= p[:unrealized] >= 0 ? "+" : "" %>$<%= p[:unrealized].abs %>
+        </td>
+        <td class="<%= p[:redeemable] > 0 ? "warn" : "dim" %>"><%= p[:redeemable] %></td>
+      </tr>
+      <% end %>
+    </tbody>
+  </table>
+  <% end %>
+
+  <h2>Weekly Patterns</h2>
+  <table>
+    <thead>
+      <tr><th>Day</th><th>Symbol</th><th>Records</th><th>Bought</th><th>Net PnL</th></tr>
+    </thead>
+    <tbody>
+      <% data[:weekly].each do |r| %>
+      <tr>
+        <td class="dim"><%= r[:day] %></td>
+        <td class="sym"><%= r[:symbol] %></td>
+        <td><%= r[:count] %></td>
+        <td class="dim">$<%= r[:bought] %></td>
+        <td class="<%= r[:pnl] >= 0 ? "pos" : "neg" %>">
+          <%= r[:pnl] >= 0 ? "+" : "" %>$<%= r[:pnl].abs %>
+        </td>
+      </tr>
+      <% end %>
+      <% if data[:weekly].empty? %>
+      <tr><td colspan="5" style="color:#333;text-align:center;padding:20px">No data</td></tr>
+      <% end %>
+    </tbody>
+  </table>
+
+  <h2>Daily Breakdown</h2>
+  <details>
+    <summary>Show / hide daily rows (<%= data[:daily].size %> rows)</summary>
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th><th>Symbol</th><th>Trades</th><th>Redeems</th>
+          <th>Bought</th><th>Sold</th><th>Redeemed</th><th>Net PnL</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% data[:daily].each do |r| %>
+        <tr>
+          <td class="dim"><%= r[:date] %></td>
+          <td class="sym"><%= r[:symbol] %></td>
+          <td><%= r[:trades] %></td>
+          <td class="<%= r[:redeems] > 0 ? "pos" : "dim" %>"><%= r[:redeems] %></td>
+          <td class="dim">$<%= r[:buy_usdc] %></td>
+          <td class="dim">$<%= r[:sell_usdc] %></td>
+          <td class="<%= r[:redeem_usdc] > 0 ? "pos" : "dim" %>">$<%= r[:redeem_usdc] %></td>
+          <td class="<%= r[:pnl] >= 0 ? "pos" : "neg" %>">
+            <%= r[:pnl] >= 0 ? "+" : "" %>$<%= r[:pnl].abs %>
+          </td>
+        </tr>
+        <% end %>
+        <% if data[:daily].empty? %>
+        <tr><td colspan="8" style="color:#333;text-align:center;padding:20px">No data</td></tr>
+        <% end %>
+      </tbody>
+    </table>
+  </details>
+
+</body>
+</html>
