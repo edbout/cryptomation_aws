@@ -225,18 +225,26 @@ def load_trades
     rescue
       next nil
     end
+
+    entry_price = d['price'].to_f
+    # Skip old/malformed orders — valid Polymarket token prices are always 0–1
+    next nil unless entry_price > 0 && entry_price < 1
+
     asset    = (all['asset'] || d['asset']).to_s.upcase
     side     = d['side'].to_s.upcase
     pm_out   = all['polymarket_direction'].to_s.upcase
     won      = !pm_out.empty? && side == pm_out
+    # 'created_at' is the current field name; 'entry_time' kept as fallback for older records
+    raw_time = (d['created_at'] || d['entry_time']).to_s
+    entry_time = raw_time[0, 19].tr('T', ' ')
 
     {
       order_id:    d['order_id'].to_s,
       asset:       asset,
       side:        side,
-      entry_price: d['price'].to_f,
+      entry_price: entry_price,
       size:        d['size'].to_f.round(2),
-      entry_time:  d['entry_time'].to_s[0, 19].tr('T', ' '),
+      entry_time:  entry_time,
       market_slug: (all['market_slug'] || d['market_slug']).to_s,
       # Exchange outcome
       ex_direction: all['exchange_direction'].to_s.upcase,
