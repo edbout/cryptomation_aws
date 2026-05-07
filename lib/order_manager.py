@@ -1568,8 +1568,8 @@ class OrderManager:
 
         # ── DYNAMIC EDGE CALCULATION ──────────────────────────────────────────
         # 1. Base: use backcalculated optimal edge (from history backtest),
-        #    clamped to [3%, 20%] so it never goes pathological.
-        edge_base = max(3.0, min(20.0, optimal_edge_base))
+        #    clamped to [3%, 12%] — lower cap prevents sparse data from demanding huge discounts.
+        edge_base = max(3.0, min(12.0, optimal_edge_base))
 
         # 2. Time-decay: later in candle = less time to recover, require more cushion.
         #    Multiplier: 1.0x at second 0 → 1.5x at second 285.
@@ -1587,7 +1587,7 @@ class OrderManager:
         vol_adj = max(0.0, min(5.0, vol_adj))  # cap at +5%
 
         required_edge = (edge_base * time_multiplier * momentum_factor) + vol_adj + BAR_OPEN_EDGE_SURCHARGE
-        required_edge = round(max(2.0, min(25.0, required_edge)), 2)  # absolute bounds
+        required_edge = round(max(2.0, min(15.0, required_edge)), 2)  # absolute bounds
 
         # Fairness score: negative = we're cheaper than history (good), positive = expensive (bad)
         edge_pct = (order_price - historical_avg) / historical_avg * 100
@@ -1991,7 +1991,7 @@ class OrderManager:
                 # Binary markets resolve instantly at bar end — holding to resolution
                 # means the losing token collapses to ~0.01 with no exit possible.
                 seconds_to_expiry = 300 - get_seconds_since_5m_start(get_utc_now())
-                if seconds_to_expiry <= 20:
+                if seconds_to_expiry <= 35:
                     logger.info(
                         f"⏰ Manage positions {asset} EXPIRY CLOSE | {seconds_to_expiry:.0f}s to bar end | "
                         f"pnl={pnl_pct:+.1f}% | Closing {market_slug} before resolution"

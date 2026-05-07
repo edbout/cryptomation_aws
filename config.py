@@ -35,7 +35,7 @@ class Config:
     PRICE_MAX = float(os.getenv("PRICE_MAX", "0.90"))
     EDGE_THRESHOLD = float(os.getenv("EDGE_THRESHOLD", "10.0")) 
     MIN_WIN_RATE_THRESHOLD = float(os.getenv("MIN_WIN_RATE_THRESHOLD", "60.0"))
-    BAR_OPEN_MIN_PCT = 0.20 # bybit 5m move must be at least 0.20%
+    BAR_OPEN_MIN_PCT = 0.10 # bybit 5m move must be at least 0.10%
     BAR_OPEN_EDGE_SURCHARGE = 3.0  # extra edge % required on top of dynamic calc
     HIST_PARAMS_DEFAULT = {"time_window": 15, "pct_tol": 0.025, "min_matches": 10}
 
