@@ -177,6 +177,62 @@
     </tbody>
   </table>
 
+  <h2>Trade History</h2>
+  <details>
+    <summary>Show / hide individual trades (<%= trades.size %> orders)</summary>
+    <table>
+      <thead>
+        <tr>
+          <th>Time (UTC)</th>
+          <th>Asset</th>
+          <th>Side</th>
+          <th>Entry</th>
+          <th>Size</th>
+          <th>Exch Dir</th>
+          <th>Exch Δ%</th>
+          <th>PM Out</th>
+          <th>PM Δ%</th>
+          <th>Result</th>
+          <th>Market</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% trades.each do |t| %>
+        <%
+          pending = t[:pm_status].empty? || t[:pm_status] == 'failed'
+          result_cls = pending ? 'dim' : (t[:won] ? 'pos' : 'neg')
+          result_lbl = pending ? '…' : (t[:won] ? 'WIN' : 'LOSS')
+          slug_short = t[:market_slug].length > 38 ? t[:market_slug][0, 38] + '…' : t[:market_slug]
+        %>
+        <tr>
+          <td class="dim"><%= t[:entry_time] %></td>
+          <td class="sym"><%= t[:asset] %></td>
+          <td class="<%= t[:side] == 'YES' ? 'pos' : 'warn' %>"><%= t[:side] %></td>
+          <td><%= t[:entry_price].round(3) %></td>
+          <td class="dim"><%= t[:size] %></td>
+          <td class="<%= t[:ex_direction] == 'UP' ? 'pos' : (t[:ex_direction].empty? ? 'dim' : 'neg') %>">
+            <%= t[:ex_direction].empty? ? '—' : t[:ex_direction] %>
+          </td>
+          <td class="<%= t[:ex_diff_pct] >= 0 ? 'pos' : 'neg' %>">
+            <% if t[:ex_status].empty? %>—<% else %><%= t[:ex_diff_pct] >= 0 ? '+' : '' %><%= t[:ex_diff_pct] %>%<% end %>
+          </td>
+          <td class="<%= t[:pm_outcome] == 'YES' ? 'pos' : (t[:pm_outcome].empty? ? 'dim' : 'neg') %>">
+            <%= t[:pm_outcome].empty? ? '—' : t[:pm_outcome] %>
+          </td>
+          <td class="<%= t[:pm_pct] >= 0 ? 'pos' : 'neg' %>">
+            <% if t[:pm_status].empty? %>—<% else %><%= t[:pm_pct] >= 0 ? '+' : '' %><%= t[:pm_pct] %>%<% end %>
+          </td>
+          <td class="<%= result_cls %>"><strong><%= result_lbl %></strong></td>
+          <td class="dim" style="font-size:10px"><%= slug_short %></td>
+        </tr>
+        <% end %>
+        <% if trades.empty? %>
+        <tr><td colspan="11" style="color:#333;text-align:center;padding:20px">No orders in Redis</td></tr>
+        <% end %>
+      </tbody>
+    </table>
+  </details>
+
   <h2>Daily Breakdown</h2>
   <details>
     <summary>Show / hide daily rows (<%= data[:daily].size %> rows)</summary>

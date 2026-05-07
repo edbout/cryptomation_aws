@@ -164,7 +164,7 @@ class OrderManager:
                         order = json.loads(orderdata)
                         if order.get("token_id") == token_id:
                             # Backfill the index so future lookups are fast
-                            self.redis.set(token_index_key, order.get("order_id", ""), ex=90 * 24 * 3600)
+                            self.redis.set(token_index_key, order.get("order_id", ""), ex=30 * 24 * 3600)
                             return order
                 if cursor == 0:
                     break
@@ -1677,10 +1677,10 @@ class OrderManager:
                 pipe.hget(order_key, "data")
                 # 3. Always save latest (overwrites = status updates)
                 pipe.hset(order_key, mapping={"minute": trigger_minute, "data": order_json})
-                # 4. 90‑day TTL
-                pipe.expire(order_key, 90 * 24 * 3600)
+                # 4. 30‑day TTL
+                pipe.expire(order_key, 30 * 24 * 3600)
                 # 5. NEW: write reverse index token_id → order_id
-                pipe.set(token_index_key, order_id, ex=90 * 24 * 3600)
+                pipe.set(token_index_key, order_id, ex=30 * 24 * 3600)
                 exists, current, _, _, _ = pipe.execute()
 
             # Log change detection
@@ -1779,8 +1779,8 @@ class OrderManager:
                 "asset": asset,
                 "signal_strength": abs(round(diff_pct, 1))
             })
-            self.redis.expire(order_key, 3600*24*90)
-            
+            self.redis.expire(order_key, 3600*24*30)
+
             logger.info(
                 f"✓ exchange_order_outcome {asset} | {direction} | "
                 f"O:{open_price:.4f}→C:{close_price:.4f} | "
@@ -1853,7 +1853,7 @@ class OrderManager:
                 "asset": asset,
             }
             self.redis.hset(order_key, mapping=mapping)
-            self.redis.expire(order_key, 3600 * 24 * 90)
+            self.redis.expire(order_key, 3600 * 24 * 30)
 
             logger.info(
                 f"✓ polymarket_order_outcome {asset} | {market_slug} | {side}→{outcome} | "

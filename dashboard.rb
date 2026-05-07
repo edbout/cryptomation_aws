@@ -169,7 +169,7 @@ def load_results
         redeem_usdc: redeems.sum { |r| r[:usdc] }.round(2),
         pnl:         rows.sum { |r| r[:flow] }.round(2) }
     end
-    .sort_by { |r| [-r[:date], r[:symbol]] }
+    .sort_by { |r| [-r[:date].tr('-', '').to_i, r[:symbol]] }
 
   # ── Weekly patterns ─────────────────────────────────────────────────────────
   day_order = %w[Monday Tuesday Wednesday Thursday Friday Saturday Sunday]
@@ -212,6 +212,44 @@ def load_results
                         fetched_at: now.strftime('%Y-%m-%d %H:%M:%S') }
   $results_cache_ts = now
   $results_cache
+end
+
+# ── Trade history from Redis ─────────────────────────────────────────────────
+def load_trades
+  keys = rdb.keys('order:*').sort
+  trades = keys.map do |key|
+    all = rdb.hgetall(key)
+    next nil unless all['data']
+    begin
+      d = JSON.parse(all['data'])
+    rescue
+      next nil
+    end
+    asset    = (all['asset'] || d['asset']).to_s.upcase
+    side     = d['side'].to_s.upcase
+    pm_out   = all['polymarket_direction'].to_s.upcase
+    won      = !pm_out.empty? && side == pm_out
+
+    {
+      order_id:    d['order_id'].to_s,
+      asset:       asset,
+      side:        side,
+      entry_price: d['price'].to_f,
+      size:        d['size'].to_f.round(2),
+      entry_time:  d['entry_time'].to_s[0, 19].tr('T', ' '),
+      market_slug: (all['market_slug'] || d['market_slug']).to_s,
+      # Exchange outcome
+      ex_direction: all['exchange_direction'].to_s.upcase,
+      ex_diff_pct:  all['exchange_diff_pct'].to_f,
+      ex_status:    all['exchange_status'].to_s,
+      # Polymarket outcome
+      pm_outcome:  pm_out,
+      pm_pct:      all['polymarket_pct'].to_f,
+      pm_status:   all['polymarket_status'].to_s,
+      won:         won,
+    }
+  end.compact
+  trades.sort_by { |t| t[:entry_time] }.reverse
 end
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -262,8 +300,9 @@ end
 
 get '/results' do
   $results_cache_ts = nil if params[:refresh]
-  data = load_results
-  erb :results, locals: { data: data, start_date: RESULTS_START.to_s }
+  data   = load_results
+  trades = load_trades
+  erb :results, locals: { data: data, start_date: RESULTS_START.to_s, trades: trades }
 end
 
 get '/health' do
