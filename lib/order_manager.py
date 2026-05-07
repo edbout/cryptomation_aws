@@ -1990,7 +1990,7 @@ class OrderManager:
                 # Highest priority: force-close within 20s of bar expiry.
                 # Binary markets resolve instantly at bar end — holding to resolution
                 # means the losing token collapses to ~0.01 with no exit possible.
-                seconds_to_expiry = 300 - get_seconds_since_5m_start(time.time())
+                seconds_to_expiry = 300 - get_seconds_since_5m_start(get_utc_now())
                 if seconds_to_expiry <= 20:
                     logger.info(
                         f"⏰ Manage positions {asset} EXPIRY CLOSE | {seconds_to_expiry:.0f}s to bar end | "
