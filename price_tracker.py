@@ -95,9 +95,6 @@ class PriceTracker:
         calibration, and outcome tracking via _update_outcomes().
 
         Separate from prices:fairvalue which is written unconditionally every 30s.
-
-        Redis key rename: prices:history → prices:signals (Apr 2026)
-        Migration: redis-cli RENAME prices:history:BTCUSDT prices:signals:BTCUSDT
         """
         if not 0 <= trigger_minute <= 4:
             logger.error(f"✗ {asset} | record_signal | invalid trigger_minute: {trigger_minute}")
@@ -409,7 +406,7 @@ class PriceTracker:
             return []
     
     def analyze_asset(self, asset: str) -> Dict[str, Any]:
-        """Raw asset names - NO normalize_asset()."""
+        """Compute win rates, avg price, volatility and per-minute stats from signal history. Expects raw Redis key suffix (e.g. BTCUSDT), no normalization applied."""
         history = self.get_signal_history(asset)
         if not history:
             return {'asset': asset, 'entries': 0, 'valid': False}
@@ -547,7 +544,7 @@ class PriceTracker:
         self.rdb.set(f"stats:optimal:{asset}", optimal, ex=86400)
 
     def run(self, limit: int = 5, details: bool = False) -> List[Dict[str, Any]]:
-        """FULL original output with per-asset details."""
+        """Analyze all tracked assets, cache trade stats for those with >=50 signals, return summaries."""
         logger.debug("🔥 Price tracker | Update Cache | details={details}")
         assets = self.get_assets(limit=limit)
         
@@ -571,14 +568,14 @@ class PriceTracker:
             except Exception as e:
                 logger.error(f"✗ {asset}: {e}")
         
-        if summaries and summary and details:
+        if summaries and details:
             print("="*60)
             self.print_overview(summaries)
         
         return summaries
     
     def print_overview(self, summaries: List[Dict[str, Any]]) -> None:
-        """Clean console output."""
+        """Print assets ranked by avg price with entry count and win rate."""
         print("🏆 TOP ASSETS BY AVG PRICE")
         print("Asset    | Avg Price | Entries | Win%  | Latest")
         print("-" * 60)
@@ -589,7 +586,7 @@ class PriceTracker:
                   f"{s['win_rate']:>4.1f}% | ${latest_p:>7.2f}")
 
     def print_asset_detail(self, summary: Dict[str, Any]) -> None:
-        """Grouped by minute + pct bucket - momentum vs win patterns."""
+        """Print per-minute win rate breakdown with price/pct distribution."""
         if summary['entries'] == 0:
             print(f"⚠️ {summary['asset']}: No data")
             return

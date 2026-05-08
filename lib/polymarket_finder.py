@@ -62,7 +62,7 @@ class PolymarketFinder:
                 response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
                 if response.status_code == 200 and response.json():
                     market = response.json()[0]
-                    self.rdb.setex(CACHE_KEY, CACHE_TTL if market.get("closed") else CACHE_TTL, json.dumps(market))
+                    self.rdb.setex(CACHE_KEY, CACHE_TTL, json.dumps(market))
                     return market
                 elif response.status_code == 404:
                     # Cache 404s for 30s to avoid spam
@@ -75,8 +75,9 @@ class PolymarketFinder:
 
     def find_polymarket_targets(self, assets: List[str]) -> Tuple[Dict[str, dict], Dict[str, dict]]:
         """
-        Filter open Polymarket 5‑minute markets suitable for immediate execution.
-        Triggers allowance/approval when seconds > 300 (next slug detected).
+        Filter open Polymarket 5-minute markets suitable for immediate execution.
+        Returns (current_markets, next_markets). next_markets is populated whenever
+        the next 5m slug already exists on Polymarket, triggering allowance/approval.
         """
         valid_markets = {}
         next_markets = {}
@@ -88,10 +89,6 @@ class PolymarketFinder:
             # Check next market exists → trigger allowance/approval
             if next_market:
                 seconds_into_current = now_ts % 300
-                if seconds_into_current > 300:  # Should never happen, but defensive
-                    logger.warning(f"⚠️ find_polymarket_targets | {asset}: seconds_into_current={seconds_into_current} > 300")
-                
-                # NEXT MARKET EXISTS → trigger allowance/approval logic
                 logger.debug(f"🎯 find_polymarket_targets | {asset}: Next 5m market detected ({seconds_into_current}s into current). Triggering allowance/approval...")
                 next_markets[asset] = next_market
 

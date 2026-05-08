@@ -44,14 +44,7 @@ def normalize_asset(asset: str) -> str:
 
 
 def normalize_polymarket_asset(asset: str) -> str:
-    """
-    Normalize asset symbol for Polymarket format.
-
-    - Lowercase input → uppercase output
-    - Strips "usdt"/"usd" suffixes
-    - Removes common punctuation (./-)
-    - Strips whitespace
-    """
+    """Lowercase asset, strip usdt/usd suffixes and punctuation (e.g. BTCUSDT → btc)."""
     if not asset:
         return ""
 
