@@ -17,6 +17,7 @@ from config import Config, RedisCache
 from price_tracker import PriceTracker
 from lib.polymarket_positions import PolymarketPositionManager
 from lib.helpers import safe_float, get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts
+from lib.telegram_alert import send_alert_sync as _tg_alert
 
 UTC = ZoneInfo("UTC")
 
@@ -632,7 +633,7 @@ class OrderManager:
         print("-"*100)
 
     def _track_close_pnl(self, asset: str, token_id: str, filled_shares: float, filled_value: float) -> None:
-        """Record realized loss to daily circuit-breaker key. Silently skips on any error."""
+        """Record realized PnL to daily circuit-breaker and rolling live-PnL list."""
         try:
             order_id = self.redis.get(f"order_token_idx:{token_id}")
             if not order_id:
@@ -649,6 +650,11 @@ class OrderManager:
                 self.redis.incrbyfloat(daily_key, abs(pnl_usd))
                 self.redis.expire(daily_key, 86400 * 2)
                 logger.debug(f"📊 _track_close_pnl | {asset} loss=${abs(pnl_usd):.2f} added to {daily_key}")
+            # Rolling live PnL (last 20 trades) for in-loop awareness
+            live_key = f"stats:live_pnl:{asset}"
+            self.redis.lpush(live_key, round(pnl_usd, 4))
+            self.redis.ltrim(live_key, 0, 19)
+            self.redis.expire(live_key, 86400)
         except Exception:
             pass
 
@@ -864,7 +870,18 @@ class OrderManager:
             kelly_boost: float = 1.0
         ) -> Optional[Dict[str, Any]]:
         """Place limit order with price validation. Retries only on PolyApiException FOK errors."""
-        
+        # Concurrent position cap — prevent over-exposure during correlated macro moves
+        try:
+            open_positions = self.position_manager.get_active_positions()
+            if len(open_positions) >= Config.MAX_CONCURRENT_POSITIONS:
+                logger.info(
+                    f"✗ safe_place_order | {asset} | concurrent cap reached "
+                    f"({len(open_positions)}/{Config.MAX_CONCURRENT_POSITIONS}) — skipping"
+                )
+                return None
+        except Exception:
+            pass  # don't block trading if position fetch fails
+
         max_retries = 1
         retry_count = 0
         while retry_count < max_retries:
@@ -1446,6 +1463,7 @@ class OrderManager:
             logger.info(
                 f"🛑 validate_adjust_price {asset} | Daily loss ${daily_loss:.2f} >= limit ${max_daily_loss:.2f} — pausing"
             )
+            _tg_alert(f"⚠️ <b>Daily loss limit hit</b> for {asset}\nLoss: ${daily_loss:.2f} / limit ${max_daily_loss:.2f} — trading paused for today")
             return None
 
         active_asset_key = f"active_{token_id}"

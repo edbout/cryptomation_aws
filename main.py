@@ -2,6 +2,7 @@
 # Polymarket 5-Minute Momentum Trading Bot 
 
 import asyncio
+import math
 import websockets
 import json
 import logging
@@ -63,6 +64,7 @@ from config import Config, RedisCache
 from components import Components
 from redeem import run_redeem_non_interactive
 from lib.helpers import  get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts, normalize_asset
+from lib.telegram_alert import send_alert
 
 @dataclass
 class TickData:
@@ -615,9 +617,10 @@ class BybitManager:
             if now_ts - self._last_trigger_ts[sym] < 5.0:
                 return
 
+            _obi_thresh = Config.OBI_THRESHOLDS.get(normalize_asset(sym), 0.15)
             obi_contradicts = (
-                (pct_change > 0 and obi < -0.15) or
-                (pct_change < 0 and obi > 0.15)
+                (pct_change > 0 and obi < -_obi_thresh) or
+                (pct_change < 0 and obi > _obi_thresh)
             )
             low_vol = not high_vol
 
@@ -863,9 +866,10 @@ class BybitManager:
                 obi = tick.order_book_imbalance
 
                 # Block only when the book strongly contradicts the signal direction
+                _obi_thresh = Config.OBI_THRESHOLDS.get(normalize_asset(sym), 0.15)
                 obi_contradicts = (
-                    (side == 'BUY'  and obi < -0.15) or
-                    (side == 'SELL' and obi > 0.15)
+                    (side == 'BUY'  and obi < -_obi_thresh) or
+                    (side == 'SELL' and obi > _obi_thresh)
                 )
 
                 reason = "epoch_bias" if in_epoch_bias else ("btc_lag" if btc_lag else "normal")
@@ -1120,30 +1124,37 @@ class ChainlinkFeed:
         return True
 
     async def listen_all(self):
+        _retry_count = 0
+        _disconnect_ts: Optional[float] = None
         while True:
             try:
                 async with websockets.connect(Config.WS_URL, ping_interval=20, ping_timeout=30) as ws:
-                    
+                    # Successful (re)connect — reset backoff state
+                    if _disconnect_ts is not None:
+                        down_secs = int(time.time() - _disconnect_ts)
+                        logger.info(f"✓ ChainlinkFeed | Reconnected after {down_secs}s down")
+                    _retry_count = 0
+                    _disconnect_ts = None
+
                     await ws.send(json.dumps({
                         "action": "subscribe",
                         "subscriptions": [
                             {
                                 "topic": Config.CHAINLINK_FEED,
                                 "type": "*",
-                                "filters": ""  # or symbol-specific filters
+                                "filters": ""
                             }
                         ]
                     }))
                     logger.info(f"✓ ChainlinkFeed | Connected and subscribed to {Config.CHAINLINK_FEED} for {list(Config.CHAINLINK_SYMBOLS.keys())}")
 
                     async for msg in ws:
-                        # --- Only parse JSON text frames; skip ping/pong ---
                         if not isinstance(msg, str):
-                            continue  # e.g. bytes, ping/pong
+                            continue
 
                         try:
                             data = json.loads(msg)
-                        except json.JSONDecodeError as e:
+                        except json.JSONDecodeError:
                             logger.debug(f"💬 ChainlinkFeed | Non-JSON/ws-control: {repr(msg)}")
                             continue
 
@@ -1171,11 +1182,22 @@ class ChainlinkFeed:
                         self.update_from_chainlink(symbol, price)
 
             except (websockets.ConnectionClosed, ConnectionResetError) as e:
-                logger.warning(f"⚠️ ChainlinkFeed | WebSocket disconnected, reconnecting in 3s: {e}")
-                await asyncio.sleep(3)
+                if _disconnect_ts is None:
+                    _disconnect_ts = time.time()
+                _retry_count += 1
+                wait = min(3 * (2 ** (_retry_count - 1)), 60)
+                down_secs = int(time.time() - _disconnect_ts)
+                logger.warning(f"⚠️ ChainlinkFeed | Disconnected ({down_secs}s), retry #{_retry_count} in {wait}s: {e}")
+                if down_secs > 60:
+                    await send_alert(f"⚠️ <b>Chainlink feed down</b> for {down_secs}s\nRetry #{_retry_count} — signals may use only Bybit+Coinbase")
+                await asyncio.sleep(wait)
             except Exception as e:
-                logger.exception(f"✗ ChainlinkFeed | top-level error: {e!r}")
-                await asyncio.sleep(5)
+                if _disconnect_ts is None:
+                    _disconnect_ts = time.time()
+                _retry_count += 1
+                wait = min(5 * (2 ** (_retry_count - 1)), 60)
+                logger.exception(f"✗ ChainlinkFeed | top-level error (retry #{_retry_count} in {wait}s): {e!r}")
+                await asyncio.sleep(wait)
 
 chainlink_feed = ChainlinkFeed()
 
@@ -1354,12 +1376,14 @@ async def redeem() -> Dict:
         return {"success": False, "message": str(e)}
 
 async def balance_check():
-    """Async balance check."""
+    """Async balance check. Alerts via Telegram when balance drops below $5."""
     try:
         balance = checker.pusd_balance
         can_trade = checker.check_trading_capacity(Config.POSITION_SIZE)
         rdb.set("bot:live_bankroll", str(round(balance, 2)), ex=300)
         logger.info("💰 balance_check | pUSD: $%.2f | Can trade: %s", balance, can_trade)
+        if balance < 5.0:
+            await send_alert(f"⚠️ <b>Low balance</b>: ${balance:.2f} pUSD\nTrading suspended until topped up")
         return can_trade
     except Exception as e:
         logger.error("💰 balance_check | failed: %s", e)
@@ -1369,38 +1393,96 @@ async def check_trading_ready() -> bool:
     if Config.DRY_RUN:
         return True
     try:
+        # Global daily drawdown stop — halt all trading if total losses exceed threshold
+        today = get_utc_now().strftime("%Y-%m-%d")
+        total_daily_loss = sum(
+            float(rdb.get(f"daily_loss:{asset}:{today}") or 0)
+            for asset in Config.ASSETS
+        )
+        max_global_loss = Config.KELLY_BANKROLL * Config.MAX_GLOBAL_DAILY_LOSS_PCT
+        if total_daily_loss >= max_global_loss:
+            logger.warning(
+                f"🛑 check_trading_ready | Global daily loss ${total_daily_loss:.2f} >= ${max_global_loss:.2f} — suspending all trading"
+            )
+            await send_alert(
+                f"🛑 <b>Global drawdown stop</b>\nTotal daily loss: ${total_daily_loss:.2f} / limit ${max_global_loss:.2f}\nAll trading suspended for today"
+            )
+            return False
+
         return await asyncio.wait_for(balance_check(), timeout=5.0)
     except asyncio.TimeoutError:
         return False
 
+async def _retry_failed_redemptions() -> None:
+    """Scan redeem:retry:* keys and re-attempt any queued failed redemptions."""
+    try:
+        keys = rdb.keys("redeem:retry:*")
+        if not keys:
+            return
+        from redeem import _redeemer, PolymarketRedeemer, RedeemPosition
+        redeemer = _redeemer or PolymarketRedeemer(mode="high_gas")
+        for key in keys:
+            try:
+                raw = rdb.get(key)
+                if not raw:
+                    continue
+                data = json.loads(raw)
+                pos = RedeemPosition(
+                    condition_id=data["condition_id"],
+                    indexes=data["index_sets"],
+                    title="retry",
+                    value=data.get("value", 0.0),
+                    size=0,
+                )
+                logger.info(f"🔄 retry_redeem | Attempting {pos.condition_id}")
+                ok = await asyncio.to_thread(redeemer.redeem_high_gas, pos)
+                if ok:
+                    rdb.delete(key)
+                    logger.info(f"✓ retry_redeem | Success for {pos.condition_id}")
+                    await send_alert(f"✅ <b>Redemption retry succeeded</b>\ncondition_id: <code>{pos.condition_id}</code>")
+            except Exception as ex:
+                logger.warning(f"✗ retry_redeem | {key}: {ex}")
+    except Exception as e:
+        logger.warning(f"✗ retry_redeem | scan failed: {e}")
+
+
 async def timer_loop():
-    """Precise 5-minute scheduler using modulo arithmetic."""
+    """Precise 5-minute scheduler with monotonic second-boundary wakeups."""
     logger.info("✓ Timer loop | Precise 5min scheduling")
-    
-    last_trading = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}  # Dict tracks per-minute timestamps
+
+    last_trading = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
+    _last_retry_redeem_ts = 0.0
     APP_STATE.can_trade = await check_trading_ready()
     while not shutting_down:
+        # Sleep precisely to the next wall-clock second boundary to eliminate drift
+        _now_ts = time.time()
+        await asyncio.sleep(math.ceil(_now_ts) - _now_ts)
+
         now = datetime.now()
         minute = now.minute
         second = now.second
-        minute_mod = minute % 5        
-        
-        try:    
+        minute_mod = minute % 5
+
+        try:
             # REDEEM: Every 5min on the 10th second
             if minute_mod == 0 and second == 10:
                 logger.info(f"🎯 Timer loop | Redeem at {now.strftime('%H:%M:%S')}")
                 await asyncio.wait_for(redeem(), timeout=45.0)
                 APP_STATE.can_trade = await check_trading_ready()
-                logger.debug(f"✓ Timer loop | Balance check: can_trade={APP_STATE.can_trade}")                
-                
+                logger.debug(f"✓ Timer loop | Balance check: can_trade={APP_STATE.can_trade}")
+
                 for sym in Config.BYBIT_SYMBOLS:
                     if BYBIT_MANAGER and sym in BYBIT_MANAGER.bybit_candles:
                         BYBIT_MANAGER.bybit_candles[sym].log_volume_status(sym)
-                
+
                 if minute == 0:
                     await asyncio.to_thread(price_tracker.run, limit=5)
-                await asyncio.sleep(1.1)
                 continue
+
+            # RETRY FAILED REDEMPTIONS: every ~10 minutes
+            if _now_ts - _last_retry_redeem_ts > 600:
+                _last_retry_redeem_ts = _now_ts
+                asyncio.create_task(_retry_failed_redemptions())
 
             # TRADING: every minute at second 0 if ready
             elif second == 0 and APP_STATE.can_trade and minute_mod in (0, 1, 2, 3, 4):
@@ -1409,12 +1491,8 @@ async def timer_loop():
                     logger.info(f"🎯 Timer loop | Trading M{minute_mod} at {now.strftime('%H:%M:%S')} | can_trade={APP_STATE.can_trade} | dry_run={Config.DRY_RUN}")
                     last_trading[minute_mod] = ts
                     await handle_next_markets_approvals()
-                await asyncio.sleep(1.1)
                 continue
-            
-            # Default: sleep 1 second (CPU efficient)
-            await asyncio.sleep(1)
-            
+
         except asyncio.CancelledError:
             logger.info("✗ Timer loop | Cancelled")
             raise

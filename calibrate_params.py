@@ -487,6 +487,31 @@ def main():
         json.dump(config_out, f, indent=2)
     print(f"\n  Results saved → {out_path}")
 
+    # ── Write fairvalue params to Redis so price_tracker.py picks them up live ──
+    # Key format: calibration:params:{asset}:{minute}  TTL: 7 days
+    written = 0
+    for asset, recs in all_fairvalue_results.items():
+        for bucket_label, rec in recs.items():
+            if bucket_label == "all":
+                minute_key = "all"
+            elif bucket_label.startswith("m") and bucket_label[1:].isdigit():
+                minute_key = int(bucket_label[1:])
+            else:
+                continue
+            params = {
+                "time_window": rec.get("time_window", DEFAULT_TIME_WINDOW),
+                "pct_tol":     rec.get("pct_tol",     DEFAULT_PCT_TOL),
+                "min_matches": rec.get("min_matches",  DEFAULT_MIN_MATCHES),
+            }
+            redis_key = f"calibration:params:{asset}:{minute_key}"
+            try:
+                rdb.setex(redis_key, 7 * 86400, json.dumps(params))
+                written += 1
+            except Exception as ex:
+                print(f"  ⚠ Redis write failed for {redis_key}: {ex}")
+    if written:
+        print(f"  ✓ Wrote {written} calibration params to Redis (TTL 7d) — price_tracker.py will use these automatically")
+
     # ── Cross-asset consensus from fairvalue dataset ─────────────────────────
     all_tw, all_pt, all_mm = [], [], []
     for recs in all_fairvalue_results.values():

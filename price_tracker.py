@@ -233,13 +233,29 @@ class PriceTracker:
     def _get_hist_params(self, asset: str, minute: int, bar_open: bool) -> Dict:
         """Resolve calibrated params for this asset+minute, apply bar_open multipliers.
 
-        Priority: per-asset per-minute > per-asset global > hardcoded default.
+        Priority: Redis (auto-calibrated) > per-asset per-minute > per-asset global > hardcoded default.
         bar_open doubles time_window and pct_tol, halves min_matches (floor 3),
         applied ON TOP of calibrated values so relative tuning is preserved.
         """
         key = asset.lower().replace("-", "").replace("/", "")
         if not key.endswith("usdt"):
             key = key + "usdt"
+
+        # Check Redis for auto-calibrated params (written by calibrate_params.py)
+        try:
+            redis_key = f"calibration:params:{key}:{minute}"
+            redis_raw = rdb.get(redis_key)
+            if redis_raw:
+                p = dict(json.loads(redis_raw))
+                if bar_open:
+                    p = {
+                        "time_window": min(p["time_window"] * 2, 60),
+                        "pct_tol":     min(p["pct_tol"] * 2,    0.20),
+                        "min_matches": max(p["min_matches"] // 2, 3),
+                    }
+                return p
+        except Exception:
+            pass
 
         asset_map = self._HIST_PARAMS.get(key)
         if asset_map is None:

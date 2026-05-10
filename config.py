@@ -53,9 +53,27 @@ class Config:
     KELLY_MIN_BET  = float(os.getenv("KELLY_MIN_BET",  "1.0"))    # floor (Polymarket CLOB minimum)
     KELLY_MAX_BET  = float(os.getenv("KELLY_MAX_BET",  "10.0"))   # ceiling (safety cap)
 
-    # Volume filter (your new addition - perfect!)
-    REQUIRE_VOL = os.getenv("REQUIRE_VOL", "true").lower() == "true"  # More explicit
-    
+    # Volume filter
+    REQUIRE_VOL = os.getenv("REQUIRE_VOL", "true").lower() == "true"
+
+    # Telegram alerting
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+
+    # Risk: max simultaneous open positions across all assets
+    MAX_CONCURRENT_POSITIONS = int(os.getenv("MAX_CONCURRENT_POSITIONS", "2"))
+
+    # Risk: global daily drawdown stop (fraction of bankroll)
+    MAX_GLOBAL_DAILY_LOSS_PCT = float(os.getenv("MAX_GLOBAL_DAILY_LOSS_PCT", "0.25"))
+
+    # OBI veto thresholds per asset (absolute value; signal contradicted when exceeded)
+    OBI_THRESHOLDS: dict = {
+        "BTCUSDT": float(os.getenv("OBI_THRESHOLD_BTC", "0.20")),
+        "ETHUSDT": float(os.getenv("OBI_THRESHOLD_ETH", "0.15")),
+        "XRPUSDT": float(os.getenv("OBI_THRESHOLD_XRP", "0.12")),
+        "SOLUSDT": float(os.getenv("OBI_THRESHOLD_SOL", "0.12")),
+    }
+
     # Assets and symbols (can be expanded easily)
     ASSETS = ["BTCUSDT","ETHUSDT","XRPUSDT","SOLUSDT"]
 
