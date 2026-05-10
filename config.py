@@ -43,8 +43,8 @@ class Config:
     BTC_LAG_TTL = 60.0            # seconds BTC momentum flag stays active for other assets
 
     # Polymarket CLOB pre-trade liquidity checks
-    CLOB_MAX_SPREAD = float(os.getenv("CLOB_MAX_SPREAD", "0.15"))          # max bid-ask spread (e.g. 0.15 = 15 cents)
-    CLOB_MAX_SLIPPAGE_PCT = float(os.getenv("CLOB_MAX_SLIPPAGE_PCT", "2.0"))  # max estimated slippage %
+    CLOB_MAX_SPREAD = float(os.getenv("CLOB_MAX_SPREAD", "0.30"))          # max bid-ask spread (e.g. 0.30 = 30 cents)
+    CLOB_MAX_SLIPPAGE_PCT = float(os.getenv("CLOB_MAX_SLIPPAGE_PCT", "7.0"))  # max estimated slippage %
 
     # Kelly Criterion position sizing
     # f* = (b*p - q) / b  where b = (1 - price) / price, p = win_rate, q = 1 - p

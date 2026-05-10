@@ -421,7 +421,7 @@ class BybitManager:
                     new_cache[asset] = (token_list[0], token_list[1])  # (yes, no)
             self._token_cache = new_cache
             self._token_cache_ts = timemodule.time()
-            logger.debug(
+            logger.info(
                 f"✓ _refresh_token_cache | {len(new_cache)} assets cached: {list(new_cache.keys())}"
             )
         except Exception as e:
@@ -561,13 +561,15 @@ class BybitManager:
             pct_change = candle_tracker.update_from_bybit(sym, price, volume, now_ts)
             high_vol = candle_tracker.has_high_volume_prev_minute(sym, multiplier=1.25) if Config.REQUIRE_VOL else True
 
-            # Polymarket fair-value recording — record_fairvalue's snap-to-mark
-            # logic (±7s of 30s marks) acts as its own throttle; safe to call every tick.
+            # Polymarket fair-value recording — only fetch midpoint near 30s sample marks
+            # to avoid hammering the CLOB API on every tick (1/sec × 5 symbols).
             asset_key = normalize_asset(sym)
             now = get_utc_now()
             candle_seconds = get_seconds_since_5m_start(now)
 
-            if asset_key in self._token_cache:
+            SAMPLE_MARKS = {0, 30, 60, 90, 120, 150, 180, 210, 240, 270}
+            near_mark = any(abs(candle_seconds - m) <= 7 for m in SAMPLE_MARKS)
+            if near_mark and asset_key in self._token_cache:
                 yes_token_id, _ = self._token_cache[asset_key]
                 try:
                     price_resp = client.get_midpoint(yes_token_id)
@@ -578,7 +580,7 @@ class BybitManager:
                                 asset_key, candle_seconds, poly_mid, pct_change, now_ts
                             )
                 except Exception as poly_err:
-                    logger.debug(f"📊 _on_ticker | {sym} poly midpoint failed: {poly_err}")
+                    logger.warning(f"⚠️ _on_ticker | {sym} poly midpoint failed: {poly_err}")
 
             # Read OBI from tracker (updated by _on_orderbook independently)
             obi = self.obi_trackers[sym].get()
