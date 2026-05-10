@@ -44,7 +44,7 @@ class Config:
 
     # Polymarket CLOB pre-trade liquidity checks
     CLOB_MAX_SPREAD = float(os.getenv("CLOB_MAX_SPREAD", "0.30"))          # max bid-ask spread (e.g. 0.30 = 30 cents)
-    CLOB_MAX_SLIPPAGE_PCT = float(os.getenv("CLOB_MAX_SLIPPAGE_PCT", "7.0"))  # max estimated slippage %
+    CLOB_MAX_SLIPPAGE_PCT = float(os.getenv("CLOB_MAX_SLIPPAGE_PCT", "5.0"))  # max estimated slippage %
 
     # Kelly Criterion position sizing
     # f* = (b*p - q) / b  where b = (1 - price) / price, p = win_rate, q = 1 - p
@@ -57,24 +57,22 @@ class Config:
     REQUIRE_VOL = os.getenv("REQUIRE_VOL", "true").lower() == "true"  # More explicit
     
     # Assets and symbols (can be expanded easily)
-    ASSETS = ["BTCUSDT","ETHUSDT","XRPUSDT","SOLUSDT","DOGEUSDT"]
-    
-    BYBIT_SYMBOLS = ["BTCUSD", "ETHUSD", "XRPUSD", "SOLUSD", "DOGEUSD"]
-    
+    ASSETS = ["BTCUSDT","ETHUSDT","XRPUSDT","SOLUSDT"]
+
+    BYBIT_SYMBOLS = ["BTCUSD", "ETHUSD", "XRPUSD", "SOLUSD"]
+
     COINBASE_SYMBOLS = {
         "BTC-PERP": "BTC-PERP-INTX",
         "ETH-PERP": "ETH-PERP-INTX",
         "XRP-PERP": "XRP-PERP-INTX",
         "SOL-PERP": "SOL-PERP-INTX",
-        "DOGE-PERP": "DOGE-PERP-INTX"   
     }
-    
+
     CHAINLINK_SYMBOLS = {
         "btc/usd": 0.0,
         "eth/usd": 0.0,
         "xrp/usd": 0.0,
         "sol/usd": 0.0,
-        "doge/usd": 0.0,
     }
     WS_URL = "wss://ws-live-data.polymarket.com"  
     CHAINLINK_FEED = "crypto_prices_chainlink"

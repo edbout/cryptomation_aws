@@ -580,7 +580,13 @@ class BybitManager:
                                 asset_key, candle_seconds, poly_mid, pct_change, now_ts
                             )
                 except Exception as poly_err:
-                    logger.warning(f"⚠️ _on_ticker | {sym} poly midpoint failed: {poly_err}")
+                    err_str = str(poly_err)
+                    if '404' in err_str or 'No orderbook' in err_str:
+                        self._token_cache.pop(asset_key, None)
+                        self._token_cache_ts = 0
+                        logger.debug(f"📊 _on_ticker | {sym} token expired, cache evicted")
+                    else:
+                        logger.warning(f"⚠️ _on_ticker | {sym} poly midpoint failed: {poly_err}")
 
             # Read OBI from tracker (updated by _on_orderbook independently)
             obi = self.obi_trackers[sym].get()
