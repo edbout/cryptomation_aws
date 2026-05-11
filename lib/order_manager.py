@@ -867,7 +867,8 @@ class OrderManager:
             asset: Optional[str] = None,
             open_price: float = 0.0,
             confidence: float = 0.0,
-            kelly_boost: float = 1.0
+            kelly_boost: float = 1.0,
+            consensus: Optional[dict] = None,
         ) -> Optional[Dict[str, Any]]:
         """Place limit order with price validation. Retries only on PolyApiException FOK errors."""
         # Concurrent position cap — prevent over-exposure during correlated macro moves
@@ -916,7 +917,8 @@ class OrderManager:
                     asset=asset,
                     token=token,
                     token_id=token_id,
-                    confidence=confidence
+                    confidence=confidence,
+                    consensus=consensus,
                 )
 
                 if order_price is None:
@@ -1423,14 +1425,15 @@ class OrderManager:
             logger.error(f"✗ place_tp_orders {asset_label:>8} | Critical error: {e}")
             return
         
-    async def _validate_adjust_price( 
+    async def _validate_adjust_price(
         self,
         trigger_minute: int,
         order_price: float,
         asset: str,
         token: str,
         token_id: str,
-        confidence: float
+        confidence: float,
+        consensus: Optional[dict] = None,
     ) -> Optional[float]:
         """Robust price validation: historical fair value + liquidity + direction.
         Dynamic edge threshold replaces hardcoded Config.EDGE_THRESHOLD:
@@ -1540,8 +1543,7 @@ class OrderManager:
                 from main import BYBIT_MANAGER
                 if BYBIT_MANAGER is not None:
                     asset_to_bybit = {
-                        "btc": "BTCUSD", "eth": "ETHUSD", "xrp": "XRPUSD",
-                        "sol": "SOLUSD", "doge": "DOGEUSD"
+                        "btc": "BTCUSD", "eth": "ETHUSD", "xrp": "XRPUSD", "sol": "SOLUSD"
                     }
                     bybit_sym = asset_to_bybit.get(asset.lower(), "")
                     if bybit_sym and bybit_sym in BYBIT_MANAGER.data:
@@ -1632,6 +1634,17 @@ class OrderManager:
             confidence, historical_avg, order_price,
             edge_pct, required_edge
         )
+
+        # Record pre-edge signal — captures every aligned+fairvalue signal regardless of edge.
+        try:
+            c = consensus or {}
+            await asyncio.to_thread(
+                self.tracker.record_signal_raw,
+                asset, token, order_price, confidence, trigger_minute, candle_seconds,
+                c.get('bybit_dir', ''), c.get('cb_dir', ''), c.get('cl_dir', ''), c.get('agree', ''),
+            )
+        except Exception:
+            pass
 
         # Edge check applies to ALL windows including 270-285s late entries.
         # time_multiplier is ~1.49x at 280s so late trades naturally need stronger edge.
@@ -1932,8 +1945,7 @@ class OrderManager:
                     if BYBIT_MANAGER is not None:
                         # Map asset name back to bybit symbol
                         asset_to_bybit = {
-                            "btc": "BTCUSD", "eth": "ETHUSD", "xrp": "XRPUSD",
-                            "sol": "SOLUSD", "doge": "DOGEUSD"
+                            "btc": "BTCUSD", "eth": "ETHUSD", "xrp": "XRPUSD", "sol": "SOLUSD"
                         }
                         clean_asset = asset.lower().replace("usdt", "")
                         bybit_sym = asset_to_bybit.get(clean_asset)
