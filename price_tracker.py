@@ -103,6 +103,7 @@ class PriceTracker:
         if price >= 1.0:
             logger.debug(f"✗ {asset} | record_signal | resolved market price {price:.4f} — skip")
             return {}
+        
         if price < 0.01:
             logger.warning(f"✗ {asset} | record_signal | unexpectedly low price: {price}")
             return {}
@@ -137,6 +138,42 @@ class PriceTracker:
                 del self._stats_cache[key]
                 
         return self.minute_stats(asset, trigger_minute)
+
+    def record_signal_raw(
+        self,
+        asset: str,
+        token: str,
+        pm_price: float,
+        bybit_pct: float,
+        trigger_minute: int,
+        candle_seconds: int,
+        bybit_dir: str = '',
+        cb_dir: str = '',
+        cl_dir: str = '',
+        agree: str = '',
+    ) -> None:
+        """Record pre-edge aligned signal to prices:signals_raw:{asset}.
+
+        Written for every signal that passes OBI + fairvalue + alignment,
+        before the edge threshold. Used for paper-trade backtesting and
+        signal quality analysis independent of edge gating.
+        """
+        if pm_price <= 0 or pm_price >= 1.0:
+            return
+
+        now = get_utc_now()
+        timestamp = now.timestamp()
+        key = f"prices:signals_raw:{asset}"
+        member = (
+            f"{trigger_minute}:{candle_seconds}:{pm_price:.6f}:{bybit_pct:.4f}:{token}:"
+            f"{bybit_dir}:{cb_dir}:{cl_dir}:{agree}:na"
+        )
+
+        pipe = self.rdb.pipeline()
+        pipe.zadd(key, {member: timestamp})
+        pipe.zremrangebyrank(key, 0, -10001)
+        pipe.expire(key, 86400 * 7)
+        pipe.execute()
 
     def get_assets(self, limit: int = 10) -> List[str]:
         assets = set()
@@ -205,7 +242,7 @@ class PriceTracker:
         },
         "ethusdt": {
             "all": {"time_window": 60, "pct_tol": 0.005, "min_matches": 10},
-            0:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 15},
+            0:     {"time_window": 15, "pct_tol": 0.005, "min_matches":  5},
             1:     {"time_window": 30, "pct_tol": 0.005, "min_matches":  7},
             2:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 10},
             3:     {"time_window": 15, "pct_tol": 0.025, "min_matches": 20},

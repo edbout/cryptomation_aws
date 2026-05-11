@@ -125,5 +125,88 @@
     </tbody>
   </table>
   <% end %>
+
+  <%# ── Raw Signals (pre-edge) ──────────────────────────────────────────────── %>
+  <h2 style="color:#aaa;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:28px 0 8px;border-top:1px solid #1e1e1e;padding-top:16px;">Raw Signals — pre-edge (paper trade tracker)</h2>
+  <p style="color:#555;font-size:10px;margin:0 0 8px">
+    <code>prices:signals_raw</code> — written at every aligned signal before the edge check. Outcome resolved at bar close. Win = token direction confirmed by Bybit.
+  </p>
+  <% if raw_sig_summary.empty? %>
+    <div class="empty">No raw signal data yet.</div>
+  <% else %>
+  <table style="margin-bottom:18px">
+    <thead>
+      <tr>
+        <th>Asset</th>
+        <th>Total</th>
+        <th>Pending</th>
+        <th>Wins</th>
+        <th>Losses</th>
+        <th>Win Rate</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% raw_sig_summary.each do |asset, s| %>
+      <tr>
+        <td class="asset"><%= asset %></td>
+        <td><%= s[:total] %></td>
+        <td class="<%= s[:pending] > 0 ? 'warn' : 'dim' %>"><%= s[:pending] %></td>
+        <td class="<%= s[:wins] > 0 ? 'good' : 'dim' %>"><%= s[:wins] %></td>
+        <td class="<%= s[:losses] > 0 ? 'bad' : 'dim' %>"><%= s[:losses] %></td>
+        <td class="rate <%= s[:win_rate] ? (s[:win_rate] >= 50 ? 'good' : 'bad') : 'dim' %>">
+          <% if s[:win_rate] %>
+            <%= s[:win_rate] %>% <span class="dim">(<%= s[:wins] %>/<%= s[:wins] + s[:losses] %>)</span>
+          <% else %>
+            —
+          <% end %>
+        </td>
+      </tr>
+      <% end %>
+    </tbody>
+  </table>
+
+  <% if raw_sig_recent.any? %>
+  <table>
+    <thead>
+      <tr>
+        <th>Time (UTC)</th>
+        <th>Asset</th>
+        <th>Token</th>
+        <th>Bybit%</th>
+        <th>PM Price</th>
+        <th>Bybit</th>
+        <th>CB</th>
+        <th>CL</th>
+        <th>Agree</th>
+        <th>Outcome</th>
+        <th>Result</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% raw_sig_recent.each do |r| %>
+      <%
+        result_cls = r[:win].nil? ? 'warn' : (r[:win] ? 'good' : 'bad')
+        result_lbl = r[:win].nil? ? 'pending' : (r[:win] ? 'WIN' : 'LOSS')
+        out_cls    = r[:outcome] == 'na' ? 'dim' : (r[:outcome] == 'up' ? 'good' : 'bad')
+        bybit_cls  = r[:bybit_pct] > 0 ? 'good' : 'bad'
+      %>
+      <tr>
+        <td class="dim"><%= Time.at(r[:ts]).utc.strftime('%m-%d %H:%M') %></td>
+        <td class="asset"><%= r[:asset] %></td>
+        <td class="dim"><%= r[:token] %></td>
+        <td class="<%= bybit_cls %>"><%= r[:bybit_pct] > 0 ? '+' : '' %><%= r[:bybit_pct].round(2) %>%</td>
+        <td class="dim"><%= r[:pm_price].round(3) %></td>
+        <td class="<%= r[:bybit_dir] == 'UP' ? 'good' : 'bad' %>"><%= r[:bybit_dir] %></td>
+        <td class="<%= r[:cb_dir] == 'UP' ? 'good' : 'bad' %>"><%= r[:cb_dir] %></td>
+        <td class="<%= r[:cl_dir].empty? ? 'dim' : (r[:cl_dir] == 'UP' ? 'good' : 'bad') %>"><%= r[:cl_dir].empty? ? '—' : r[:cl_dir] %></td>
+        <td class="dim"><%= r[:agree] %></td>
+        <td class="<%= out_cls %>"><%= r[:outcome] == 'na' ? '…' : r[:outcome] %></td>
+        <td class="<%= result_cls %>"><b><%= result_lbl %></b></td>
+      </tr>
+      <% end %>
+    </tbody>
+  </table>
+  <% end %>
+  <% end %>
 </body>
 </html>

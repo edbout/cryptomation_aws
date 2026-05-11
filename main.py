@@ -192,8 +192,9 @@ class BybitCandle5m:
             if self.candle:
                 old_change = self._pct_change()
                 direction = "🟢   UP" if old_change > 0 else "🔴 DOWN" if old_change < 0 else "⚪ FLAT"                
-                outcome = 'up' if old_change > 0 else 'down'                
+                outcome = 'up' if old_change > 0 else 'down'
                 records = self._update_outcomes(symbol, outcome)
+                self._update_raw_outcomes(symbol, outcome)
                 self._update_order_outcomes(symbol, old_change, self.candle["start_bar_ts"])
                 logger.info(
                     f"🔄 update_from_bybit     | {direction} | {symbol:>9} | {old_change:+.3f}% | {price:10.4f} | {bar_start} | records updated: {records}"
@@ -257,6 +258,40 @@ class BybitCandle5m:
                     symbol, updated, len(cur_members), outcome)
 
         return len(cur_members)
+
+    def _update_raw_outcomes(self, symbol: str, outcome: str) -> int:
+        """Resolve :na outcomes in prices:signals_raw:{asset} at bar close."""
+        now = datetime.now(UTC)
+        now_ts = now.timestamp()
+        window_start = now_ts - 360
+
+        key = f"prices:signals_raw:{normalize_asset(symbol)}"
+        cur_members = self.redis.zrangebyscore(key, window_start, now_ts)
+
+        stale_na = [m for m in self.redis.zrangebyscore(key, '-inf', window_start - 1) if m.endswith(':na')]
+        if stale_na:
+            self.redis.zrem(key, *stale_na)
+            logger.info("🧹 update_raw_outcomes | %s: removed %d stale :na", symbol, len(stale_na))
+
+        if not cur_members:
+            return 0
+
+        pipe = self.redis.pipeline()
+        updated = 0
+        for member in cur_members:
+            if not member.endswith(':na'):
+                continue
+            base = member[:-3]  # strip ':na'
+            new_member = f"{base}:{outcome}"
+            pipe.zrem(key, member)
+            pipe.zadd(key, {new_member: now_ts})
+            updated += 1
+
+        if updated:
+            pipe.execute()
+            logger.debug("🔄 update_raw_outcomes | %s: resolved %d → %s", symbol, updated, outcome)
+
+        return updated
 
     def _update_order_outcomes(self, symbol: str, bar_pct: float, bar_start_ts: int):
         """Write Bybit/Coinbase/Chainlink consensus direction to orders placed during the closed bar."""
@@ -832,7 +867,7 @@ class BybitManager:
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=5)
 
-    def get_signal(self, sym: str) -> Optional[Tuple[str, str, float, float]]:
+    def get_signal(self, sym: str) -> Optional[Tuple[str, str, float, float, dict]]:
         tick = self.data.get(sym)
         logger.debug(f"📊 get_signal | {sym} tick data: {tick}")
         if not tick or tick.candle_5m_pct is None:
@@ -950,7 +985,17 @@ class BybitManager:
                 )
 
                 if high_vol and side and not obi_contradicts:
-                    return (normalize_asset(sym), side, bybit_5m_pct, open_price)
+                    bybit_dir = "UP" if bybit_5m_pct > 0 else "DOWN"
+                    cb_dir = "UP" if coinbase_pct > 0 else "DOWN"
+                    cl_dir = ("UP" if chainlink_pct > 0 else "DOWN") if use_chainlink_direction else ""
+                    total_n = 3 if use_chainlink_direction else 2
+                    consensus = {
+                        "bybit_dir": bybit_dir,
+                        "cb_dir": cb_dir,
+                        "cl_dir": cl_dir,
+                        "agree": f"{total_n}/{total_n}",
+                    }
+                    return (normalize_asset(sym), side, bybit_5m_pct, open_price, consensus)
                 return None
 
 BYBIT_MANAGER: Optional[BybitManager] = None
@@ -1300,7 +1345,7 @@ async def execute_trading_validation(symbol: str = None) -> Optional[Dict]:
         signal_coros = [getsignal(s) for s in Config.BYBIT_SYMBOLS]
         raw_signals = await asyncio.gather(*signal_coros, return_exceptions=True)
     
-    signals: List[Tuple[str, str, float, float]] = [s for s in raw_signals if isinstance(s, tuple)]
+    signals: List[Tuple[str, str, float, float, dict]] = [s for s in raw_signals if isinstance(s, tuple)]
 
     if not signals:
         logger.debug("No signals for %s", symbol or "all")
@@ -1316,28 +1361,30 @@ async def execute_trading_validation(symbol: str = None) -> Optional[Dict]:
     return {"trades": successful_trades} if successful_trades else None
 
 async def _execute_parallel_trades(
-    markets: Dict[str, Dict], 
-    signals: List[Tuple[str, str, float, float]]
+    markets: Dict[str, Dict],
+    signals: List[Tuple[str, str, float, float, dict]]
 ) -> List[Optional[Dict]]:
     """Execute trades concurrently with semaphore for capacity control."""
     semaphore = asyncio.Semaphore(3)  # Limit to 3 concurrent trades
-    
+
     async def _trade_with_semaphore(
         asset: str, direction: str, confidence: float, open_price: float,
-        market_slug: str, token_id: str, token: str, kelly_boost: float
+        market_slug: str, token_id: str, token: str, kelly_boost: float,
+        consensus: dict
     ) -> Optional[Dict]:
         async with semaphore:
             result = await order_mgr.safe_place_order(
-                market_slug, token_id, token, asset, open_price, confidence, kelly_boost
+                market_slug, token_id, token, asset, open_price, confidence, kelly_boost,
+                consensus=consensus
             )
             if result:
                 logger.debug("✓ execute_parallel_trades | Trade executed %s (open: %.2f)", asset, open_price)
             else:
                 logger.debug("✗ execute_parallel_trades | Trade failed %s", asset)
             return result
-   
+
     tasks = []
-    for asset, direction, confidence, sig_open in signals:
+    for asset, direction, confidence, sig_open, consensus in signals:
         if asset not in markets:
             continue
 
@@ -1358,7 +1405,8 @@ async def _execute_parallel_trades(
         kelly_boost = BYBIT_MANAGER.get_kelly_boost(asset, direction) if BYBIT_MANAGER else 1.0
 
         tasks.append(_trade_with_semaphore(
-            asset, direction, confidence, sig_open, market_slug, token_id, token, kelly_boost
+            asset, direction, confidence, sig_open, market_slug, token_id, token, kelly_boost,
+            consensus
         ))
     
     return await asyncio.gather(*tasks, return_exceptions=True)
@@ -1573,7 +1621,7 @@ async def timer_loop():
             logger.error(f"✗ Timer loop | Error: {e}")
             await asyncio.sleep(5)
 
-async def getsignal(sym: str) -> Optional[Tuple[str, str, float, float]]:
+async def getsignal(sym: str) -> Optional[Tuple[str, str, float, float, dict]]:
     global BYBIT_MANAGER
     if not BYBIT_MANAGER:
         return None

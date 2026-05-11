@@ -341,7 +341,49 @@ get '/stats' do
       sig_total: sig_total, sig_na: sig_na, fv_total: fv_total
     }
   end
-  erb :stats, locals: { stats: stats, time: Time.now.strftime('%Y-%m-%d %H:%M:%S') }
+  # ── Raw signal data (prices:signals_raw:{asset}) ──────────────────────────
+  raw_sig_summary = {}
+  raw_sig_recent  = []
+
+  %w[BTC ETH SOL XRP].each do |asset|
+    key     = "prices:signals_raw:#{asset.downcase}"
+    entries = begin
+      rdb.zrevrangebyscore(key, '+inf', '-inf', with_scores: true, limit: [0, 500])
+    rescue
+      []
+    end
+
+    parsed = entries.filter_map do |member, score|
+      parts = member.to_s.split(':')
+      next unless parts.size >= 10
+      token   = parts[4]
+      outcome = parts[9]
+      win = outcome == 'na' ? nil : (token == 'YES' ? outcome == 'up' : outcome == 'down')
+      { asset: asset, ts: score.to_f, candle_seconds: parts[1].to_f,
+        pm_price: parts[2].to_f, bybit_pct: parts[3].to_f,
+        token: token, bybit_dir: parts[5], cb_dir: parts[6], cl_dir: parts[7],
+        agree: parts[8], outcome: outcome, win: win }
+    end
+
+    resolved = parsed.reject { |r| r[:outcome] == 'na' }
+    wins     = resolved.count { |r| r[:win] }
+
+    raw_sig_summary[asset] = {
+      total:    parsed.size,
+      pending:  parsed.count { |r| r[:outcome] == 'na' },
+      wins:     wins,
+      losses:   resolved.size - wins,
+      win_rate: resolved.size > 0 ? (wins.to_f / resolved.size * 100).round(1) : nil,
+    }
+
+    raw_sig_recent.concat(parsed.first(100))
+  end
+
+  raw_sig_recent.sort_by! { |r| -r[:ts] }
+  raw_sig_recent = raw_sig_recent.first(150)
+
+  erb :stats, locals: { stats: stats, time: Time.now.strftime('%Y-%m-%d %H:%M:%S'),
+                        raw_sig_summary: raw_sig_summary, raw_sig_recent: raw_sig_recent }
 end
 
 get '/results' do

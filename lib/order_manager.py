@@ -867,7 +867,8 @@ class OrderManager:
             asset: Optional[str] = None,
             open_price: float = 0.0,
             confidence: float = 0.0,
-            kelly_boost: float = 1.0
+            kelly_boost: float = 1.0,
+            consensus: Optional[dict] = None,
         ) -> Optional[Dict[str, Any]]:
         """Place limit order with price validation. Retries only on PolyApiException FOK errors."""
         # Concurrent position cap — prevent over-exposure during correlated macro moves
@@ -916,7 +917,8 @@ class OrderManager:
                     asset=asset,
                     token=token,
                     token_id=token_id,
-                    confidence=confidence
+                    confidence=confidence,
+                    consensus=consensus,
                 )
 
                 if order_price is None:
@@ -1419,14 +1421,15 @@ class OrderManager:
             logger.error(f"✗ place_tp_orders {asset_label:>8} | Critical error: {e}")
             return
         
-    async def _validate_adjust_price( 
+    async def _validate_adjust_price(
         self,
         trigger_minute: int,
         order_price: float,
         asset: str,
         token: str,
         token_id: str,
-        confidence: float
+        confidence: float,
+        consensus: Optional[dict] = None,
     ) -> Optional[float]:
         """Robust price validation: historical fair value + liquidity + direction.
         Dynamic edge threshold replaces hardcoded Config.EDGE_THRESHOLD:
@@ -1628,6 +1631,17 @@ class OrderManager:
             confidence, historical_avg, order_price,
             edge_pct, required_edge
         )
+
+        # Record pre-edge signal — captures every aligned+fairvalue signal regardless of edge.
+        try:
+            c = consensus or {}
+            await asyncio.to_thread(
+                self.tracker.record_signal_raw,
+                asset, token, order_price, confidence, trigger_minute, candle_seconds,
+                c.get('bybit_dir', ''), c.get('cb_dir', ''), c.get('cl_dir', ''), c.get('agree', ''),
+            )
+        except Exception:
+            pass
 
         # Edge check applies to ALL windows including 270-285s late entries.
         # time_multiplier is ~1.49x at 280s so late trades naturally need stronger edge.
