@@ -861,7 +861,7 @@ class BybitManager:
                     and ((bybit_5m_pct > 0) == (BYBIT_MANAGER._btc_momentum_direction == "UP"))
                 )
                 in_epoch_bias = tick.candle_seconds <= Config.EPOCH_BIAS_SECS
-                side_threshold = Config.REDUCED_THRESHOLD_PCT if (in_epoch_bias or btc_lag) else 0.05
+                side_threshold = Config.REDUCED_THRESHOLD_PCT if (in_epoch_bias or btc_lag) else Config.BAR_OPEN_MIN_PCT
                 side = 'SELL' if bybit_5m_pct < -side_threshold else 'BUY' if bybit_5m_pct > side_threshold else None
                 obi = tick.order_book_imbalance
 
