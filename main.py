@@ -1612,7 +1612,7 @@ async def main():
     if not test_redis():
         logger.error("✗ main | Redis required")
         return 
-    
+        
     # Initialize ALL feeds FIRST (before starting)
     coinbase_feed = CoinbaseFeed()
     chainlink_feed = ChainlinkFeed()
@@ -1621,7 +1621,8 @@ async def main():
     checker.log_status()     
     
     logger.info("🚀 main | Starting")
-
+    await send_alert(f"<b>Restarted Bot</b>\n🚀 main | Starting")
+   
     # Clear orders + start background threads
     await order_mgr.clear_open_orders()
     await asyncio.to_thread(price_tracker.run, limit=5)
