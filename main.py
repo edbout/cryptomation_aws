@@ -78,7 +78,9 @@ class TickData:
 class OrderBookTracker:
     """Tracks rolling order book imbalance from Bybit top-of-book data.
     OBI = (bid_qty - ask_qty) / (bid_qty + ask_qty)
-    Smoothed over last N poll samples (each 5s) to reduce noise.
+    Smoothed over last N poll samples (each ~5s) to reduce noise.
+    Also exposes trend(): positive = OBI improving toward balance,
+    negative = OBI worsening. Used by trend-aware suppression (Change 2).
     """
     def __init__(self, window: int = 6):  # 6 × 5s = 30s rolling window
         self.history: deque = deque(maxlen=window)
@@ -89,12 +91,28 @@ class OrderBookTracker:
             return 0.0
         raw_obi = (bid_qty - ask_qty) / total
         self.history.append(raw_obi)
-        return sum(self.history) / len(self.history)
+        return self.get()
 
     def get(self) -> float:
         if not self.history:
             return 0.0
         return sum(self.history) / len(self.history)
+
+    def trend(self) -> float:
+        """Linear regression slope of OBI samples over the rolling window.
+        Positive  → OBI improving (moving toward 0 or positive).
+        Negative  → OBI worsening (moving further negative).
+        Returns 0.0 if fewer than 3 samples are available.
+        """
+        h = list(self.history)
+        n = len(h)
+        if n < 3:
+            return 0.0
+        mean_x = (n - 1) / 2.0
+        mean_y = sum(h) / n
+        num = sum((i - mean_x) * (h[i] - mean_y) for i in range(n))
+        den = sum((i - mean_x) ** 2 for i in range(n))
+        return num / den if den != 0 else 0.0
 
 class VolumeTracker:
     def __init__(self, max_history: int = 20):
@@ -618,17 +636,17 @@ class BybitManager:
             if now_ts - self._last_trigger_ts[sym] < 5.0:
                 return
 
-            _obi_thresh = Config.OBI_THRESHOLDS.get(normalize_asset(sym), 0.15)
-            obi_contradicts = (
-                (pct_change > 0 and obi < -_obi_thresh) or
-                (pct_change < 0 and obi > _obi_thresh)
-            )
+            direction = "UP" if pct_change > 0 else "DOWN"
+            _obi_thresh = self._effective_obi_thresh(sym, btc_lag, direction)
+            obi_trend = self.obi_trackers[sym].trend()
+            obi_contradicts = self._obi_contradicts(obi, obi_trend, _obi_thresh, pct_change)
             low_vol = not high_vol
 
             if obi_contradicts or (Config.REQUIRE_VOL and low_vol):
                 logger.info(
                     f"⚠️ _on_ticker | {sym:>8} | Suppressed | {pct_change:+.2f}% | "
-                    f"low_vol={low_vol} | obi={obi:+.3f} OBI_contra={obi_contradicts}"
+                    f"low_vol={low_vol} | obi={obi:+.3f} trend={obi_trend:+.4f} "
+                    f"thresh={_obi_thresh:.2f} OBI_contra={obi_contradicts}"
                 )
                 return
 
@@ -654,6 +672,53 @@ class BybitManager:
 
         except Exception as e:
             logger.error(f"✗ _on_ticker | handler error: {e}")
+
+    def _multi_asset_aligned(self, sym: str, direction: str) -> bool:
+        """Returns True if at least one of the other major assets (BTC, ETH) has a
+        5m candle confirming the same direction as sym.
+        Used in Change 3 to relax OBI suppression during confirmed cross-asset moves.
+        direction: 'UP' or 'DOWN'
+        """
+        is_up = (direction == "UP")
+        for check_sym in ("BTCUSD", "ETHUSD"):
+            if check_sym == sym:
+                continue
+            tick = self.data.get(check_sym)
+            if tick and ((tick.candle_5m_pct > 0) == is_up):
+                return True
+        return False
+
+    def _effective_obi_thresh(self, sym: str, btc_lag: bool, direction: str) -> float:
+        """Compute the effective OBI veto threshold for sym, applying BTC-lag relaxation
+        (Change 3) when btc_lag is active and cross-asset alignment is confirmed.
+        """
+        base = Config.OBI_THRESHOLDS.get(normalize_asset(sym), 0.15)
+        if btc_lag and self._multi_asset_aligned(sym, direction):
+            return base * Config.OBI_BTC_LAG_RELAX
+        return base
+
+    def _obi_contradicts(self, obi: float, obi_trend: float, thresh: float,
+                         pct_change: float) -> bool:
+        """Core OBI contradiction check shared between _on_ticker and get_signal.
+
+        A signal is vetoed only when:
+          1. OBI level strongly contradicts the price direction (Change 1 — calibrated thresh), AND
+          2. OBI trend is NOT recovering toward balance (Change 2 — trend-aware veto).
+
+        obi_trend > OBI_RECOVERY_RATE  → bids strengthening in a bull move  → pass
+        obi_trend < -OBI_RECOVERY_RATE → asks strengthening in a bear move  → pass
+        """
+        level_contra = (
+            (pct_change > 0 and obi < -thresh) or
+            (pct_change < 0 and obi > thresh)
+        )
+        if not level_contra:
+            return False
+        recovering = (
+            (pct_change > 0 and obi_trend >  Config.OBI_RECOVERY_RATE) or
+            (pct_change < 0 and obi_trend < -Config.OBI_RECOVERY_RATE)
+        )
+        return not recovering
 
     def get_kelly_boost(self, asset: str, direction: str) -> float:
         """Compute a Kelly bankroll multiplier from funding rate and recent liquidations.
@@ -868,15 +933,19 @@ class BybitManager:
                 obi = tick.order_book_imbalance
 
                 # Block only when the book strongly contradicts the signal direction
-                _obi_thresh = Config.OBI_THRESHOLDS.get(normalize_asset(sym), 0.15)
-                obi_contradicts = (
-                    (side == 'BUY'  and obi < -_obi_thresh) or
-                    (side == 'SELL' and obi > _obi_thresh)
-                )
+                # (Changes 1+2+3: calibrated threshold, trend-aware, BTC-lag relaxed)
+                gs_direction = "UP" if bybit_5m_pct > 0 else "DOWN"
+                _obi_thresh = (BYBIT_MANAGER._effective_obi_thresh(sym, btc_lag, gs_direction)
+                               if BYBIT_MANAGER else Config.OBI_THRESHOLDS.get(normalize_asset(sym), 0.15))
+                obi_trend = (BYBIT_MANAGER.obi_trackers[sym].trend()
+                             if BYBIT_MANAGER and sym in BYBIT_MANAGER.obi_trackers else 0.0)
+                obi_contradicts = (BYBIT_MANAGER._obi_contradicts(obi, obi_trend, _obi_thresh, bybit_5m_pct)
+                                   if BYBIT_MANAGER else False)
 
                 reason = "epoch_bias" if in_epoch_bias else ("btc_lag" if btc_lag else "normal")
                 logger.debug(
                     f"📊 get_signal | {sym:>8} | chg={bybit_5m_pct:+.2f}% | OBI={obi:+.3f} | "
+                    f"trend={obi_trend:+.4f} thresh={_obi_thresh:.2f} "
                     f"contradicts={obi_contradicts} | volume={high_vol} | [{reason}]"
                 )
 

@@ -53,7 +53,7 @@ end
 POLY_USER      = '0x4fF44F5E2c039122Daab3047F03D390AACda8915'
 POLY_ACTIVITY  = 'https://data-api.polymarket.com/activity'
 POLY_POSITIONS = 'https://data-api.polymarket.com/positions'
-POLY_SYMS      = %w[btc eth sol xrp doge]
+POLY_SYMS      = %w[btc eth sol xrp]
 RESULTS_START  = Date.new(2026, 5, 1)
 RESULTS_TTL    = 300  # seconds before re-fetching
 

@@ -19,7 +19,7 @@ log/
 # Secrets / keys
 ireland.pem
 *.pem
-AWS_SETUP.md
+AWS.md
 
 # Claude
 .claude

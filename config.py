@@ -66,13 +66,25 @@ class Config:
     # Risk: global daily drawdown stop (fraction of bankroll)
     MAX_GLOBAL_DAILY_LOSS_PCT = float(os.getenv("MAX_GLOBAL_DAILY_LOSS_PCT", "0.25"))
 
-    # OBI veto thresholds per asset (absolute value; signal contradicted when exceeded)
+    # OBI veto thresholds per asset (absolute value; signal contradicted when exceeded).
+    # Raised for ETH/XRP/SOL: Bybit books are structurally ask-heavy during rallies,
+    # so tight thresholds produce false vetoes on genuine bullish moves.
     OBI_THRESHOLDS: dict = {
         "BTCUSDT": float(os.getenv("OBI_THRESHOLD_BTC", "0.20")),
-        "ETHUSDT": float(os.getenv("OBI_THRESHOLD_ETH", "0.15")),
-        "XRPUSDT": float(os.getenv("OBI_THRESHOLD_XRP", "0.12")),
-        "SOLUSDT": float(os.getenv("OBI_THRESHOLD_SOL", "0.12")),
+        "ETHUSDT": float(os.getenv("OBI_THRESHOLD_ETH", "0.18")),
+        "XRPUSDT": float(os.getenv("OBI_THRESHOLD_XRP", "0.18")),
+        "SOLUSDT": float(os.getenv("OBI_THRESHOLD_SOL", "0.15")),
     }
+
+    # OBI trend sensitivity: minimum per-sample improvement rate to classify OBI as
+    # "recovering". When OBI contradicts direction but is recovering at or above this
+    # rate, the veto is lifted (Change 2 — trend-aware suppression).
+    OBI_RECOVERY_RATE: float = float(os.getenv("OBI_RECOVERY_RATE", "0.005"))
+
+    # BTC-lag OBI relaxation multiplier: effective threshold is multiplied by this
+    # factor when btc_lag is active and another asset confirms direction.
+    # e.g. 1.4 → XRP effective threshold becomes 0.18 * 1.4 = 0.25 during lag moves.
+    OBI_BTC_LAG_RELAX: float = float(os.getenv("OBI_BTC_LAG_RELAX", "1.4"))
 
     # Assets and symbols (can be expanded easily)
     ASSETS = ["BTCUSDT","ETHUSDT","XRPUSDT","SOLUSDT"]
