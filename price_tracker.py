@@ -195,14 +195,6 @@ class PriceTracker:
             3:     {"time_window": 15, "pct_tol": 0.075, "min_matches": 20},
             4:     {"time_window": 30, "pct_tol": 0.010, "min_matches":  7},
         },
-        "dogeusdt": {
-            "all": {"time_window": 60, "pct_tol": 0.010, "min_matches": 20},
-            0:     {"time_window": 15, "pct_tol": 0.010, "min_matches": 20},
-            1:     {"time_window": 30, "pct_tol": 0.050, "min_matches": 15},
-            2:     {"time_window": 15, "pct_tol": 0.010, "min_matches": 20},
-            3:     {"time_window": 30, "pct_tol": 0.005, "min_matches":  7},
-            4:     {"time_window": 30, "pct_tol": 0.010, "min_matches":  3},
-        },
         "ethusdt": {
             "all": {"time_window": 60, "pct_tol": 0.005, "min_matches": 10},
             0:     {"time_window": 15, "pct_tol": 0.005, "min_matches": 15},
