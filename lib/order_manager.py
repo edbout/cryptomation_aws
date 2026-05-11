@@ -17,7 +17,7 @@ from config import Config, RedisCache
 from price_tracker import PriceTracker
 from lib.polymarket_positions import PolymarketPositionManager
 from lib.helpers import safe_float, get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts
-from lib.telegram_alert import send_alert_sync as _tg_alert
+from lib.telegram_alert import send_alert as _tg_alert_async, send_alert_sync as _tg_alert
 
 UTC = ZoneInfo("UTC")
 
@@ -882,7 +882,7 @@ class OrderManager:
         except Exception:
             pass  # don't block trading if position fetch fails
 
-        max_retries = 1
+        max_retries = 3
         retry_count = 0
         while retry_count < max_retries:
             try:
@@ -929,6 +929,10 @@ class OrderManager:
                 if not clob_ok:
                     logger.info(f"✗ safe_place_order | CLOB rejected {asset} {token}: {clob_reason}")
                     self.redis.hincrby(f"stats:trade:{asset}", "clob_fail", 1)
+                    asyncio.create_task(_tg_alert_async(
+                        f"⚠️ <b>Signal dropped — CLOB rejected</b>\n"
+                        f"Asset: {asset} ({token})\nReason: {clob_reason}"
+                    ))
                     return None
                 logger.debug(f"✓ safe_place_order | CLOB ok {asset} {token}: {clob_reason}")
 
@@ -1025,7 +1029,7 @@ class OrderManager:
                     logger.error(f"✗ safe_place_order | failed after {max_retries} retries: {e}")
                     return None
                 logger.warning(f"✗ safe_place_order | PolyApiException (attempt {retry_count}/{max_retries}): {e}")
-                await asyncio.sleep(1 if retry_count == 1 else 2 ** retry_count)
+                await asyncio.sleep(2 ** (retry_count - 1))  # 1s, 2s, 4s
                 
             except Exception as e:
                 logger.exception(f"✗ safe_place_order | failed (non-retryable): %s: %s", type(e).__name__, e)
