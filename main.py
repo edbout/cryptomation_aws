@@ -948,9 +948,12 @@ class BybitManager:
                 rdb.hincrby(f"stats:trade:{normalize_asset(sym)}", "alignment_fail", 1)
                 return None
             else:
+                cl_note = (f"Chainlink: {chainlink_pct:+.2f}%"
+                           if use_chainlink_direction
+                           else f"Chainlink: {chainlink_pct:+.2f}% (stale/excl)")
                 logger.info(
                         f"✓ get_signal | {sym:>8} | Bybit: {bybit_5m_pct:+.2f}% | "
-                        f"Coinbase: {coinbase_pct:+.2f}% | Chainlink: {chainlink_pct:+.2f}% | Aligned"
+                        f"Coinbase: {coinbase_pct:+.2f}% | {cl_note} | Aligned"
                     )
                 rdb.hincrby(f"stats:trade:{normalize_asset(sym)}", "alignment_pass", 1)
 
@@ -1353,7 +1356,7 @@ async def execute_trading_validation(symbol: str = None) -> Optional[Dict]:
             await handle_next_markets_approvals()
         return None
     
-    if len(markets) < len(signals):
+    if markets and len(markets) < len(signals):
         logger.warning("execute_trading_validation | Signal count (%d) exceeds market count (%d) for %s", len(signals), len(markets), symbol or "all")
         
     trade_results = await _execute_parallel_trades(markets, signals)
