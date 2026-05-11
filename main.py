@@ -881,8 +881,7 @@ class BybitManager:
             "BTCUSD":   ("btc/usd",   "BTC-PERP"),
             "ETHUSD":   ("eth/usd",   "ETH-PERP"),
             "XRPUSD":   ("xrp/usd",   "XRP-PERP"),
-            "SOLUSD":   ("sol/usd",   "SOL-PERP"),
-            "DOGEUSD":  ("doge/usd",  "DOGE-PERP")
+            "SOLUSD":   ("sol/usd",   "SOL-PERP")
         }
         chainlink_sym, coinbase_sym = symbol_map.get(sym, (None, None))
 
@@ -896,10 +895,8 @@ class BybitManager:
             else:
                 chainlink_pct = 0.0
 
-            # Chainlink oracle only fires on 0.5%+ deviation — stale when move is small
             now_ts_sig = timemodule.time()
             chainlink_age = now_ts_sig - self.chainlink_feed.chainlink_last_update_ts.get(chainlink_sym, 0.0)
-            chainlink_fresh = chainlink_age < 30.0
 
             coinbase_current = self.coinbase_feed.last_prices.get(coinbase_sym, 0.0)
             coinbase_base_5m = self.coinbase_feed.coinbase_5m_bases.get(coinbase_sym, 0.0)
@@ -909,34 +906,13 @@ class BybitManager:
             else:
                 coinbase_pct = 0.0
 
-            # When Chainlink is fresh: enforce magnitude, direction, and divergence
-            # When stale: exclude entirely — stale oracle data from a different market
-            # regime actively corrupts the direction vote; Bybit+Coinbase is sufficient
-            if chainlink_fresh:
-                chainlink_strong = abs(chainlink_pct) > 0.03
-                use_chainlink_direction = True
-            else:
-                logger.debug(f"⚠️ get_signal | {sym} Chainlink stale ({chainlink_age:.0f}s) — excluded from alignment")
-                chainlink_strong = True          # stale — don't gate on it
-                use_chainlink_direction = False  # stale — don't include in direction vote
-
-            strong_enough = (
-                abs(bybit_5m_pct) > 0.03
-                and abs(coinbase_pct) > 0.03
-                and chainlink_strong
-            )
-
-            if use_chainlink_direction:
-                same_direction = (bybit_5m_pct > 0) == (chainlink_pct > 0) == (coinbase_pct > 0)
-            else:
-                same_direction = (bybit_5m_pct > 0) == (coinbase_pct > 0)
-
+            # Alignment: Bybit + Coinbase only (Chainlink excluded — oracle fires only on
+            # 0.5%+ moves, so it's stale on nearly every signal at our 0.03% threshold).
+            # Chainlink direction is still recorded in the consensus dict for outcome tracking.
+            strong_enough = abs(bybit_5m_pct) > 0.03 and abs(coinbase_pct) > 0.03
+            same_direction = (bybit_5m_pct > 0) == (coinbase_pct > 0)
             max_div = max(0.12, abs(bybit_5m_pct) * 0.6)  # relative ±60%, min 0.12%
-            chainlink_div_ok = (not chainlink_fresh) or (abs(bybit_5m_pct - chainlink_pct) <= max_div)
-            not_too_far = (
-                chainlink_div_ok
-                and abs(bybit_5m_pct - coinbase_pct) <= max_div
-            )
+            not_too_far = abs(bybit_5m_pct - coinbase_pct) <= max_div
 
             aligned = strong_enough and same_direction and not_too_far
             if not aligned:
@@ -948,12 +924,9 @@ class BybitManager:
                 rdb.hincrby(f"stats:trade:{normalize_asset(sym)}", "alignment_fail", 1)
                 return None
             else:
-                cl_note = (f"Chainlink: {chainlink_pct:+.2f}%"
-                           if use_chainlink_direction
-                           else f"Chainlink: {chainlink_pct:+.2f}% (stale/excl)")
                 logger.info(
                         f"✓ get_signal | {sym:>8} | Bybit: {bybit_5m_pct:+.2f}% | "
-                        f"Coinbase: {coinbase_pct:+.2f}% | {cl_note} | Aligned"
+                        f"Coinbase: {coinbase_pct:+.2f}% | Chainlink: {chainlink_pct:+.2f}% (age={chainlink_age:.0f}s, info) | Aligned"
                     )
                 rdb.hincrby(f"stats:trade:{normalize_asset(sym)}", "alignment_pass", 1)
 
@@ -990,13 +963,12 @@ class BybitManager:
                 if high_vol and side and not obi_contradicts:
                     bybit_dir = "UP" if bybit_5m_pct > 0 else "DOWN"
                     cb_dir = "UP" if coinbase_pct > 0 else "DOWN"
-                    cl_dir = ("UP" if chainlink_pct > 0 else "DOWN") if use_chainlink_direction else ""
-                    total_n = 3 if use_chainlink_direction else 2
+                    cl_dir = ("UP" if chainlink_pct > 0 else "DOWN") if chainlink_pct != 0.0 else ""
                     consensus = {
                         "bybit_dir": bybit_dir,
                         "cb_dir": cb_dir,
                         "cl_dir": cl_dir,
-                        "agree": f"{total_n}/{total_n}",
+                        "agree": "2/2",
                     }
                     return (normalize_asset(sym), side, bybit_5m_pct, open_price, consensus)
                 return None

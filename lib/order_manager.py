@@ -1539,8 +1539,7 @@ class OrderManager:
                 from main import BYBIT_MANAGER
                 if BYBIT_MANAGER is not None:
                     asset_to_bybit = {
-                        "btc": "BTCUSD", "eth": "ETHUSD", "xrp": "XRPUSD",
-                        "sol": "SOLUSD", "doge": "DOGEUSD"
+                        "btc": "BTCUSD", "eth": "ETHUSD", "xrp": "XRPUSD", "sol": "SOLUSD"
                     }
                     bybit_sym = asset_to_bybit.get(asset.lower(), "")
                     if bybit_sym and bybit_sym in BYBIT_MANAGER.data:
@@ -1942,8 +1941,7 @@ class OrderManager:
                     if BYBIT_MANAGER is not None:
                         # Map asset name back to bybit symbol
                         asset_to_bybit = {
-                            "btc": "BTCUSD", "eth": "ETHUSD", "xrp": "XRPUSD",
-                            "sol": "SOLUSD", "doge": "DOGEUSD"
+                            "btc": "BTCUSD", "eth": "ETHUSD", "xrp": "XRPUSD", "sol": "SOLUSD"
                         }
                         clean_asset = asset.lower().replace("usdt", "")
                         bybit_sym = asset_to_bybit.get(clean_asset)
