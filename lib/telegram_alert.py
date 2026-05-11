@@ -18,7 +18,7 @@ async def send_alert(message: str) -> None:
         return
     url = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendMessage"
     try:
-        logger.info(f"📤 Sending Telegram: {message[:50]}...")
+        logger.debug(f"📤 Sending Telegram: {message[:50]}...")
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 url,
@@ -44,6 +44,7 @@ def send_alert_sync(message: str) -> None:
     url = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendMessage"
     try:
         import requests
+        logger.debug(f"📤 Sending Telegram: {message[:50]}...")
         requests.post(
             url,
             json={"chat_id": _CHAT_ID, "text": message, "parse_mode": "HTML"},

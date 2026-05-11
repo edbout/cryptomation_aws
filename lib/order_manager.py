@@ -1153,6 +1153,10 @@ class OrderManager:
                         f"✅ exec_order {label} {asset} | {token_short} | "
                         f"${size:.2f}@{order_price:.3f} → {exec_time:.1f}s"
                     )
+                    _tg_alert_async(
+                        f"✅ exec_order {label} {asset} | {token_short} | "
+                        f"${size:.2f}@{order_price:.3f} → {exec_time:.1f}s"
+                    )
                     did_succeed = True
                 else:
                     error_msg = short_error_msg(result)
@@ -1968,6 +1972,10 @@ class OrderManager:
                     if pnl_pct > 0:
                         self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="expiry")
+                    _tg_alert_async(
+                        f"⏰ Manage positions {asset} EXPIRY CLOSE | {seconds_to_expiry:.0f}s to bar end | "
+                        f"pnl={pnl_pct:+.1f}% | Closing {market_slug} before resolution"
+                    )
                     return
 
                 elif current_price >= tp_price_target:
@@ -1975,12 +1983,14 @@ class OrderManager:
                     self.redis.hincrby(f"stats:trade:{asset}", "tp", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="tp")
+                    _tg_alert_async(f"🟢 Manage positions {asset} TP HIT price={current_price:.3f} >= {tp_price_target:.3f} | Closing {market_slug}")
                     return
 
                 elif pnl_pct <= -sl_pct:
                     logger.info(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (<= -{sl_pct:.1f}%) | Closing {market_slug}")
                     self.redis.hincrby(f"stats:trade:{asset}", "sl", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="sl")
+                    _tg_alert_async(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (<= -{sl_pct:.1f}%) | Closing {market_slug}")
                     return
 
                 elif max_pnl_pct > 15 and pnl_pct <= trailing_stop_pct:
@@ -1990,6 +2000,9 @@ class OrderManager:
                     self.redis.hincrby(f"stats:trade:{asset}", "trail_stop", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="trail")
+                    _tg_alert_async(
+                        f"🟠 Manage positions {asset} TRAIL HIT pnl={pnl_pct:.1f}% peak={max_pnl_pct:.1f}% stop={trailing_stop_pct:.1f}% | Closing {market_slug}"
+                    )
                     return
 
         except Exception as e:
