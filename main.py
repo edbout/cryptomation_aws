@@ -3,6 +3,7 @@
 
 import asyncio
 import math
+import signal
 import websockets
 import json
 import logging
@@ -625,14 +626,14 @@ class BybitManager:
             low_vol = not high_vol
 
             if obi_contradicts or (Config.REQUIRE_VOL and low_vol):
-                logger.debug(
-                    f"⚠️ _on_ticker | {sym:>8} | Skipping | {pct_change:+.2f}% | "
-                    f"low_vol={low_vol} | {obi:+.3f} OBI_contra={obi_contradicts}"
+                logger.info(
+                    f"⚠️ _on_ticker | {sym:>8} | Suppressed | {pct_change:+.2f}% | "
+                    f"low_vol={low_vol} | obi={obi:+.3f} OBI_contra={obi_contradicts}"
                 )
                 return
 
             reason = "epoch_bias" if in_epoch_bias else ("btc_lag" if btc_lag else "normal")
-            logger.debug(
+            logger.info(
                 f"📊 _on_ticker | {sym:>8} | Triggering [{reason}] | {price:.2f} | "
                 f"5m {pct_change:+.2f}% | OBI {obi:+.3f} | vol {high_vol}"
             )
@@ -839,14 +840,15 @@ class BybitManager:
 
             aligned = strong_enough and same_direction and not_too_far
             if not aligned:
-                logger.debug(
+                logger.info(
                         f"🚫 get_signal | {sym:>8} | Bybit: {bybit_5m_pct:+.2f}% | "
-                        f"Coinbase: {coinbase_pct:+.2f}% | Chainlink: {chainlink_pct:+.2f}% | No alignment"
+                        f"Coinbase: {coinbase_pct:+.2f}% | Chainlink: {chainlink_pct:+.2f}% (age={chainlink_age:.0f}s) | "
+                        f"strong={strong_enough} dir={same_direction} div_ok={not_too_far}"
                     )
                 rdb.hincrby(f"stats:trade:{normalize_asset(sym)}", "alignment_fail", 1)
                 return None
             else:
-                logger.debug(
+                logger.info(
                         f"✓ get_signal | {sym:>8} | Bybit: {bybit_5m_pct:+.2f}% | "
                         f"Coinbase: {coinbase_pct:+.2f}% | Chainlink: {chainlink_pct:+.2f}% | Aligned"
                     )
@@ -1541,7 +1543,19 @@ async def main():
     BYBIT_MANAGER.start_websocket(loop)
          
     sched_task = asyncio.create_task(timer_loop())
-    
+
+    def _on_sigterm():
+        global shutting_down
+        shutting_down = True
+        logger.info("🛑 main | SIGTERM received — initiating clean shutdown")
+        sched_task.cancel()
+
+    try:
+        loop.add_signal_handler(signal.SIGTERM, _on_sigterm)
+        logger.info("✓ main | SIGTERM handler registered")
+    except (NotImplementedError, AttributeError):
+        logger.debug("⚠️ main | SIGTERM handler not supported on this platform (Windows)")
+
     try:
         await sched_task
     except asyncio.CancelledError:
