@@ -298,6 +298,23 @@ get '/' do
 end
 
 get '/stats' do
+  # ── Data health: check all 4 assets unconditionally via fairvalue (written every 30s, no gate) ──
+  data_health = %w[BTCUSDT ETHUSDT SOLUSDT XRPUSDT].map do |asset|
+    fv_key  = "prices:fairvalue:#{asset}"
+    raw_key = "prices:signals_raw:#{asset}"
+    sig_key = "prices:signals:#{asset}"
+    fv_ttl  = rdb.ttl(fv_key).to_i
+    raw_ttl = rdb.ttl(raw_key).to_i
+    {
+      asset:     asset,
+      fv_total:  rdb.zcard(fv_key).to_i,
+      fv_ttl:    fv_ttl,
+      raw_total: rdb.zcard(raw_key).to_i,
+      raw_ttl:   raw_ttl,
+      sig_total: rdb.zcard(sig_key).to_i,
+    }
+  end
+
   keys  = rdb.keys('stats:trade:*').sort
   stats = keys.each_with_object({}) do |key, h|
     asset = key.sub('stats:trade:', '')
@@ -383,7 +400,8 @@ get '/stats' do
   raw_sig_recent = raw_sig_recent.first(150)
 
   erb :stats, locals: { stats: stats, time: Time.now.strftime('%Y-%m-%d %H:%M:%S'),
-                        raw_sig_summary: raw_sig_summary, raw_sig_recent: raw_sig_recent }
+                        raw_sig_summary: raw_sig_summary, raw_sig_recent: raw_sig_recent,
+                        data_health: data_health }
 end
 
 get '/results' do

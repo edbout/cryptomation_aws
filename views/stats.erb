@@ -34,6 +34,47 @@
   <h1>Trade Stats by Asset</h1>
   <div class="meta">Last updated: <%= time %> &nbsp;|&nbsp; <a href="/stats">Refresh</a> &nbsp;|&nbsp; auto-refreshes every 30s</div>
 
+  <%# ── Data Health ──────────────────────────────────────────────────────────── %>
+  <h2 style="color:#aaa;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:0 0 8px;padding-top:4px;">Data Health</h2>
+  <p style="color:#555;font-size:10px;margin:0 0 8px">
+    <code>fairvalue</code> written every 30 s unconditionally — 0 means the bot is not running or Redis key expired.
+    TTL resets on each write; if &lt; 1 day the key is about to expire with no recent writes.
+  </p>
+  <table style="margin-bottom:22px">
+    <thead>
+      <tr>
+        <th>Asset</th>
+        <th>Fairvalue records</th>
+        <th>FV TTL (days)</th>
+        <th>Raw signals</th>
+        <th>Raw TTL (days)</th>
+        <th>Signals (trades)</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% data_health.each do |d| %>
+      <%
+        fv_days  = d[:fv_ttl]  > 0 ? (d[:fv_ttl]  / 86400.0).round(1) : nil
+        raw_days = d[:raw_ttl] > 0 ? (d[:raw_ttl] / 86400.0).round(1) : nil
+        fv_ok    = d[:fv_total] > 100
+        raw_ok   = d[:raw_total] > 0
+        status   = !fv_ok ? 'NO DATA' : (!raw_ok ? 'fv only' : 'OK')
+        status_cls = !fv_ok ? 'bad' : (!raw_ok ? 'warn' : 'good')
+      %>
+      <tr>
+        <td class="asset"><%= d[:asset] %></td>
+        <td class="<%= fv_ok ? 'good' : 'bad' %>"><%= d[:fv_total] %></td>
+        <td class="<%= fv_days && fv_days >= 1 ? 'good' : 'bad' %>"><%= fv_days ? "#{fv_days}d" : '—' %></td>
+        <td class="<%= raw_ok ? 'good' : (d[:raw_ttl] == -2 ? 'bad' : 'warn') %>"><%= d[:raw_total] %></td>
+        <td class="<%= raw_days && raw_days >= 1 ? 'good' : (raw_days ? 'warn' : 'dim') %>"><%= raw_days ? "#{raw_days}d" : '—' %></td>
+        <td class="<%= d[:sig_total] > 0 ? 'good' : 'dim' %>"><%= d[:sig_total] %></td>
+        <td class="<%= status_cls %>"><b><%= status %></b></td>
+      </tr>
+      <% end %>
+    </tbody>
+  </table>
+
   <% if stats.empty? %>
     <div class="empty">No stats:trade:* keys in Redis yet — data accumulates as the bot trades.</div>
   <% else %>
