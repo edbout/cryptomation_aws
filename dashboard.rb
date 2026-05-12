@@ -338,24 +338,11 @@ get '/stats' do
     closed  = tp + sl + trail + expiry
     win_rate = closed > 0 ? (correct.to_f / closed * 100).round(1) : nil
 
-    sig_key = "prices:signals:#{asset}"
-    fv_key  = "prices:fairvalue:#{asset}"
-    sig_total   = rdb.zcard(sig_key).to_i
-    sig_pending = rdb.zcount(sig_key, '-inf', '+inf').to_i  # all; pending = ending :na
-    # count members ending in :na via zrangebyscore scan (approximate via ZSCAN pattern)
-    sig_na = begin
-      rdb.zrange(sig_key, 0, -1).count { |m| m.end_with?(':na') }
-    rescue
-      0
-    end
-    fv_total = rdb.zcard(fv_key).to_i
-
     h[asset] = {
       alignment_pass: align_pass, alignment_fail: align_fail, alignment_rate: align_rate,
       clob_fail: clob_fail, order_placed: placed, clob_rate: clob_rate,
       tp: tp, sl: sl, trail_stop: trail, expiry_close: expiry,
       correct: correct, closed: closed, win_rate: win_rate,
-      sig_total: sig_total, sig_na: sig_na, fv_total: fv_total
     }
   end
   # ── Raw signal data (prices:signals_raw:{asset}) ──────────────────────────
