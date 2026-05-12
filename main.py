@@ -925,7 +925,7 @@ class BybitManager:
                 return None
             else:
                 logger.info(
-                        f"✓ get_signal | {sym:>8} | Bybit: {bybit_5m_pct:+.2f}% | "
+                        f"📊 get_signal | {sym:>8} | Bybit: {bybit_5m_pct:+.2f}% | "
                         f"Coinbase: {coinbase_pct:+.2f}% | Chainlink: {chainlink_pct:+.2f}% (age={chainlink_age:.0f}s, info) | Aligned"
                     )
                 rdb.hincrby(f"stats:trade:{normalize_asset(sym)}", "alignment_pass", 1)
@@ -954,25 +954,32 @@ class BybitManager:
                                    if BYBIT_MANAGER else False)
 
                 reason = "epoch_bias" if in_epoch_bias else ("btc_lag" if btc_lag else "normal")
-                logger.debug(
-                    f"📊 get_signal | {sym:>8} | chg={bybit_5m_pct:+.2f}% | OBI={obi:+.3f} | "
+
+                signal_ok = bool(side) and high_vol and not obi_contradicts
+
+                log_prefix = "📊 get_signal" if signal_ok else "🚫 get_signal"
+                logger.info(
+                    f"{log_prefix} | {sym:>8} | chg={bybit_5m_pct:+.2f}% | OBI={obi:+.3f} | "
                     f"trend={obi_trend:+.4f} thresh={_obi_thresh:.2f} "
                     f"contradicts={obi_contradicts} | volume={high_vol} | [{reason}]"
                 )
 
-                if high_vol and side and not obi_contradicts:
-                    bybit_dir = "UP" if bybit_5m_pct > 0 else "DOWN"
-                    cb_dir = "UP" if coinbase_pct > 0 else "DOWN"
-                    cl_dir = ("UP" if chainlink_pct > 0 else "DOWN") if chainlink_pct != 0.0 else ""
-                    consensus = {
-                        "bybit_dir": bybit_dir,
-                        "cb_dir": cb_dir,
-                        "cl_dir": cl_dir,
-                        "agree": "2/2",
-                    }
-                    return (normalize_asset(sym), side, bybit_5m_pct, open_price, consensus)
-                return None
+                if not signal_ok:
+                    return None
 
+                bybit_dir = "UP" if bybit_5m_pct > 0 else "DOWN"
+                cb_dir = "UP" if coinbase_pct > 0 else "DOWN"
+                cl_dir = "UP" if chainlink_pct > 0 else ("DOWN" if chainlink_pct < 0 else "")
+
+                consensus = {
+                    "bybit_dir": bybit_dir,
+                    "cb_dir": cb_dir,
+                    "cl_dir": cl_dir,
+                    "agree": "2/2",
+                }
+
+                return normalize_asset(sym), side, bybit_5m_pct, open_price, consensus
+            
 BYBIT_MANAGER: Optional[BybitManager] = None
 
 shutting_down = False

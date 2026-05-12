@@ -25,7 +25,7 @@ try:
 except ImportError:
         pass
 
-from config import RedisCache
+from config import RedisCache, Config
 from lib.rpc_utils import RPCManager
 from lib.polymarket_positions import PolymarketPositionManager
 from lib.telegram_alert import send_alert_sync as _tg_alert
@@ -89,12 +89,10 @@ class PolymarketRedeemer:
             "passphrase": os.getenv("API_PASSPHRASE")
         }
         
-        self.private_key = os.getenv("PRIVATE_KEY")
+        self.private_key = Config.PRIVATE_KEY
         self.owner_account = Account.from_key(self.private_key)
         self.eoa_address = self.owner_account.address
-        self.proxy_wallet = Web3.to_checksum_address(
-            os.getenv("PROXY_WALLET", "0x6367BB01F6d3A257b7a71A6F9E826b59b0Be5846")
-        )
+        self.proxy_wallet = Web3.to_checksum_address(Config.PROXY_WALLET)
 
         self.rpc_manager = RPCManager()
         self.w3 = self.rpc_manager.get_w3(timeout=15)
@@ -105,7 +103,7 @@ class PolymarketRedeemer:
         self._pm_eoa   = PolymarketPositionManager(self.eoa_address)
         self._pm_proxy = PolymarketPositionManager(self.proxy_wallet)
         self.position_manager = self._pm_eoa  # default for show_active_positions_dashboard
-        logger.info(f"init | {self.mode.upper()} mode | EOA: {self.eoa_address} | Proxy: {self.proxy_wallet} | Verbose: {self.verbose_cache}")
+        logger.debug(f"✓ init | {self.mode.upper()} mode | EOA: {self.eoa_address} | Proxy: {self.proxy_wallet} | Verbose: {self.verbose_cache}")
     
     def _validate_env(self):
         required = ["PRIVATE_KEY"]
