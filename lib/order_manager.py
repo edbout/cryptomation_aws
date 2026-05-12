@@ -34,6 +34,7 @@ class OrderManager:
         self.tracker = PriceTracker()
         self._pending_tasks = []
         self._weak_signal_last_bar: Dict[str, int] = {}  # asset → bar_start of last logged weak signal
+        self._no_stats_last_bar: Dict[str, int] = {}   # asset → bar_start of last logged should_trade=False
 
     def get_direction(self, symbol: str) -> tuple[str, float, float]:
         """Returns ("BUY"/"SELL"/"ERROR", open_price, close_price) for CURRENT 5min candle."""
@@ -1457,11 +1458,15 @@ class OrderManager:
             return None
         
         if not stats or not stats.should_trade:
-            win_rate = getattr(stats, 'win_rate', 0.0) if stats else 0.0
-            avg_price = getattr(stats, 'avg_price', 0.0) if stats else 0.0
-            count = getattr(stats, 'count', 0) if stats else 0
-            logger.debug(f"✗ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
-                    f"win_rate={win_rate:.3f}% | avg_price={avg_price:.3f} | count={count} | skipped")
+            bar_start = get_current_5m_bar_ts(time.time())
+            if self._no_stats_last_bar.get(asset) != bar_start:
+                self._no_stats_last_bar[asset] = bar_start
+                win_rate = getattr(stats, 'win_rate', 0.0) if stats else 0.0
+                avg_price = getattr(stats, 'avg_price', 0.0) if stats else 0.0
+                count = getattr(stats, 'count', 0) if stats else 0
+                reason = "no stats" if not stats else f"win_rate={win_rate:.1f}% count={count}"
+                logger.info(f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
+                        f"should_trade=False ({reason}) | avg_price={avg_price:.3f} — skip")
             return None
         
         # Daily loss circuit breaker — pause asset if it lost >15% of bankroll today
@@ -1642,6 +1647,11 @@ class OrderManager:
                 self.tracker.record_signal_raw,
                 asset, token, order_price, confidence, trigger_minute, candle_seconds,
                 c.get('bybit_dir', ''), c.get('cb_dir', ''), c.get('cl_dir', ''), c.get('agree', ''),
+            )
+            logger.info(
+                f"📍 validate_adjust_price {asset:>8} | Raw signal | tm={trigger_minute} "
+                f"s={candle_seconds} | {token} @ {order_price:.4f} | "
+                f"bybit={c.get('bybit_dir','')} cb={c.get('cb_dir','')}"
             )
         except Exception:
             pass

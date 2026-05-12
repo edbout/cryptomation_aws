@@ -23,7 +23,7 @@ class MinuteStats:
     count: int
     should_trade: bool
     price_std: float = 0.0      
-    optimal_edge: float = 10.0  
+    optimal_edge: float = 3.0
 
 class PriceTracker:
     def __init__(self):
@@ -59,12 +59,12 @@ class PriceTracker:
             avg_seconds = float(minute_data.get('avg_seconds', 0.0))
             count = int(minute_data.get('count', 0))
             price_std = float(minute_data.get('price_std', 0.0))
-            optimal_edge = float(minute_data.get('optimal_edge', 10.0))
+            optimal_edge = float(minute_data.get('optimal_edge', 3.0))
 
             # Break-even win rate = entry price, so require win_rate > max(60%, avg_price*100 + 3pp)
             breakeven_threshold = avg_price * 100 + 3.0 if avg_price > 0 else 0.0
             should_trade = (
-                count > 50
+                count >= 5
                 and win_rate >= Config.MIN_WIN_RATE_THRESHOLD
                 and win_rate >= breakeven_threshold
             )
@@ -499,19 +499,19 @@ class PriceTracker:
             'stats':     stats,
             'latest':    latest,
             'history':   history,
-            'valid':     len(history) >= 50,
+            'valid':     len(history) >= 10,
         }
 
     def _calc_optimal_edge(self, history: List[Dict], minute: int) -> float:
         """Backtest edge thresholds 2-20% against historical data to find the EV-maximising threshold.
         Returns the edge % that gave highest win rate with sufficient sample (>=10 trades).
-        Falls back to 10.0 if insufficient data.
+        Falls back to 3.0 if insufficient data.
         """
         minute_history = [h for h in history if h.get('minute') == minute]
-        if len(minute_history) < 20:
-            return 10.0
+        if len(minute_history) < 10:
+            return 3.0
 
-        best_edge = 10.0
+        best_edge = 3.0
         best_ev = 0.0
 
         minute_avg = mean(h['price'] for h in minute_history)
@@ -607,7 +607,7 @@ class PriceTracker:
                 if details:      
                     self.print_asset_detail(summary)
                 
-                if summary['entries'] >= 50:
+                if summary['entries'] >= 10:
                     self.cache_trade_stats(summary)
                     summaries.append(summary)
             except Exception as e:
