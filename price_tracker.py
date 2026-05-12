@@ -450,9 +450,10 @@ class PriceTracker:
             logger.error(f"❌ get_fairvalue_history | {asset}: {e}")
             return []
     
-    def analyze_asset(self, asset: str) -> Dict[str, Any]:
+    def analyze_asset(self, asset: str, history: Optional[List[Dict]] = None) -> Dict[str, Any]:
         """Compute win rates, avg price, volatility and per-minute stats from signal history. Expects raw Redis key suffix (e.g. BTCUSDT), no normalization applied."""
-        history = self.get_signal_history(asset)
+        if history is None:
+            history = self.get_signal_history(asset)
         if not history:
             return {'asset': asset, 'entries': 0, 'valid': False}
 
@@ -588,28 +589,96 @@ class PriceTracker:
         )
         self.rdb.set(f"stats:optimal:{asset}", optimal, ex=86400)
 
+    def seed_stats_from_raw(self, asset: str) -> bool:
+        """Bootstrap stats:summary from prices:signals_raw when prices:signals is empty.
+
+        Breaks the chicken-and-egg deadlock: prices:signals is only written after a
+        trade passes all gates, but should_trade requires stats built from that same
+        history. Raw signals carry the same directional data with resolved bar-close
+        outcomes and are sufficient to seed the win-rate cache.
+
+        Only activates when prices:signals has < 10 records so real trade data always
+        takes precedence once it accumulates.
+        """
+        normalized = normalize_asset(asset) if not asset.endswith('USDT') else asset
+        sig_key = f"prices:signals:{normalized}"
+        if self.rdb.zcard(sig_key) >= 10:
+            return False
+
+        raw_key = f"prices:signals_raw:{normalized}"
+        members = self.rdb.zrangebyscore(raw_key, '-inf', '+inf', withscores=True)
+        if not members:
+            logger.debug(f"⏳ seed_stats_from_raw | {normalized}: no raw signals found")
+            return False
+
+        history = []
+        for mem_bytes, ts in members:
+            mem_str = mem_bytes.decode() if isinstance(mem_bytes, bytes) else mem_bytes
+            parts = mem_str.split(':')
+            if len(parts) < 10:
+                continue
+            outcome = parts[9]
+            if outcome == 'na':
+                continue
+            try:
+                history.append({
+                    'seconds':   int(parts[1]),
+                    'price':     float(parts[2]),
+                    'pct':       float(parts[3]),
+                    'direction': 'up' if parts[5].upper() == 'UP' else 'down',
+                    'outcome':   outcome,
+                    'ts':        float(ts),
+                    'minute':    int(parts[0]),
+                })
+            except (ValueError, IndexError):
+                continue
+
+        if len(history) < 10:
+            logger.info(f"⏳ seed_stats_from_raw | {normalized}: only {len(history)} resolved raw signals — need 10")
+            return False
+
+        summary = self.analyze_asset(normalized, history=history)
+        if summary.get('valid'):
+            self.cache_trade_stats(summary)
+            logger.info(
+                f"✅ seed_stats_from_raw | {normalized}: seeded stats from {len(history)} raw signals "
+                f"(win_rate={summary['win_rate']:.1f}%)"
+            )
+            return True
+        return False
+
     def run(self, limit: int = 5, details: bool = False) -> List[Dict[str, Any]]:
-        """Analyze all tracked assets, cache trade stats for those with >=50 signals, return summaries."""
+        """Analyze all tracked assets, cache trade stats for those with >=10 signals, return summaries.
+        Falls back to seeding from raw signals for assets that have not yet traded."""
         logger.debug("🔥 Price tracker | Update Cache | details={details}")
-        assets = self.get_assets(limit=limit)
-        
+
+        # Discover assets from both real signals and raw signals (pre-trade bootstrap)
+        assets = set(self.get_assets(limit=limit))
+        for k in self.rdb.keys("prices:signals_raw:*"):
+            key_str = k.decode() if isinstance(k, bytes) else k
+            assets.add(key_str.split(':')[-1])
+        assets = sorted(assets)[:limit]
+
         if not assets:
             logger.warning("❌ run | No price history keys found.")
             return []
-        
+
         logger.debug(f"📊 run | Found {len(assets)} assets: {assets}")
         summaries = []
-        
+
         for asset in assets:
             try:
                 summary = self.analyze_asset(asset)
-                logger.debug(f"✓ {asset}: {summary['entries']:,} entries")          
-                if details:      
+                logger.debug(f"✓ {asset}: {summary['entries']:,} entries")
+                if details:
                     self.print_asset_detail(summary)
-                
+
                 if summary['entries'] >= 10:
                     self.cache_trade_stats(summary)
                     summaries.append(summary)
+                else:
+                    # No real signal history yet — seed from raw signals to unblock trading
+                    self.seed_stats_from_raw(asset)
             except Exception as e:
                 logger.error(f"✗ {asset}: {e}")
         

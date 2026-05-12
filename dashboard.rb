@@ -345,8 +345,8 @@ get '/stats' do
   raw_sig_summary = {}
   raw_sig_recent  = []
 
-  %w[BTC ETH SOL XRP].each do |asset|
-    key     = "prices:signals_raw:#{asset.downcase}"
+  rdb.keys('prices:signals_raw:*').sort.each do |key|
+    asset   = key.sub('prices:signals_raw:', '').upcase
     entries = begin
       rdb.zrevrangebyscore(key, '+inf', '-inf', with_scores: true, limit: [0, 500])
     rescue
