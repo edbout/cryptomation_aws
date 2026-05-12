@@ -1576,8 +1576,7 @@ async def timer_loop():
                     if BYBIT_MANAGER and sym in BYBIT_MANAGER.bybit_candles:
                         BYBIT_MANAGER.bybit_candles[sym].log_volume_status(sym)
 
-                if minute == 0:
-                    await asyncio.to_thread(price_tracker.run, limit=5)
+                await asyncio.to_thread(price_tracker.run, limit=5)
                 continue
 
             # RETRY FAILED REDEMPTIONS: every ~10 minutes
