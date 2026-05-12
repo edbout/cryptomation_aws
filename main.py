@@ -1336,7 +1336,7 @@ async def execute_trading_validation(symbol: str = None) -> Optional[Dict]:
         return None
     
     if markets and len(markets) < len(signals):
-        logger.warning("execute_trading_validation | Signal count (%d) exceeds market count (%d) for %s", len(signals), len(markets), symbol or "all")
+        logger.warning("✗ execute_trading_validation | Signal count (%d) exceeds market count (%d) for %s", len(signals), len(markets), symbol or "all")
         
     trade_results = await _execute_parallel_trades(markets, signals)
     successful_trades = [r for r in trade_results if r is not None]
@@ -1378,11 +1378,11 @@ async def _execute_parallel_trades(
         if direction == "BUY":
             token_id = token_list[0]  # YES token
             token = "YES"
-            logger.debug("🚀 execute_parallel_trades | BUYING YES for %s (open: %.2f)", asset, sig_open)
+            logger.info("🚀 execute_parallel_trades | BUYING YES for %s (open: %.2f)", asset, sig_open)
         else:  # SELL
             token_id = token_list[1]  # NO token
             token = "NO"
-            logger.debug("🚀 BUYING NO for %s (open: %.2f)", asset, sig_open)
+            logger.info("🚀 execute_parallel_trades | BUYING NO for %s (open: %.2f)", asset, sig_open)
 
         kelly_boost = BYBIT_MANAGER.get_kelly_boost(asset, direction) if BYBIT_MANAGER else 1.0
 
