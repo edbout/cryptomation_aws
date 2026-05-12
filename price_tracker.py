@@ -649,16 +649,12 @@ class PriceTracker:
         Falls back to seeding from raw signals for assets that have not yet traded."""
         logger.debug("🔥 Price tracker | Update Cache | details={details}")
 
-        # Discover assets from both real signals and raw signals (pre-trade bootstrap)
-        assets = set(self.get_assets(limit=limit))
-        for k in self.rdb.keys("prices:signals_raw:*"):
+        # Always include known configured assets; supplement with any dynamic Redis keys
+        assets = set(Config.ASSETS)
+        for k in self.rdb.keys("prices:signals:*") + self.rdb.keys("prices:signals_raw:*"):
             key_str = k.decode() if isinstance(k, bytes) else k
             assets.add(key_str.split(':')[-1])
         assets = sorted(assets)[:limit]
-
-        if not assets:
-            logger.warning("❌ run | No price history keys found.")
-            return []
 
         logger.debug(f"📊 run | Found {len(assets)} assets: {assets}")
         summaries = []
