@@ -61,12 +61,9 @@ class PriceTracker:
             price_std = float(minute_data.get('price_std', 0.0))
             optimal_edge = float(minute_data.get('optimal_edge', 3.0))
 
-            # Break-even win rate = entry price, so require win_rate > max(60%, avg_price*100 + 3pp)
-            breakeven_threshold = avg_price * 100 + 3.0 if avg_price > 0 else 0.0
             should_trade = (
                 count >= 5
                 and win_rate >= Config.MIN_WIN_RATE_THRESHOLD
-                and win_rate >= breakeven_threshold
             )
             
             stats = MinuteStats(
@@ -578,7 +575,7 @@ class PriceTracker:
             }
 
         stats_key = f"stats:summary:{asset}"
-        self.rdb.set(stats_key, json.dumps(outcomes), ex=3600)  # 1h TTL
+        self.rdb.set(stats_key, json.dumps(outcomes), ex=7200)  # 2h TTL — overlaps hourly refresh
 
         ranked = sorted(outcomes.items(), key=lambda x: x[1]['win_rate'], reverse=True)
         best_minute, best_data = ranked[0]
