@@ -1444,19 +1444,33 @@ class OrderManager:
           - Volatility scaling: high price_std asset → wider natural spread, need more edge
         """
         
-        # Read stats without recording — signal only written after all gates pass (fix: was corrupting win-rate stats)
         stats = self.tracker.minute_stats(asset, trigger_minute)
 
         if order_price > Config.PRICE_MAX:
-            logger.debug("✗ validate_adjust_price %-8s | tm=%d | order_price=%.4f > max=%.4f | skipped", 
+            logger.debug("✗ validate_adjust_price %-8s | tm=%d | order_price=%.4f > max=%.4f | skipped",
                         asset, trigger_minute, order_price, Config.PRICE_MAX)
             return None
-        
+
         if order_price < Config.PRICE_MIN:
-            logger.debug("✗ validate_adjust_price %-8s | tm=%d | order_price=%.4f < min=%.4f | skipped", 
+            logger.debug("✗ validate_adjust_price %-8s | tm=%d | order_price=%.4f < min=%.4f | skipped",
                         asset, trigger_minute, order_price, Config.PRICE_MIN)
             return None
-        
+
+        # Compute candle timing early so raw signals can be written before the stats gate.
+        # Dead/closing zones are excluded — they're timing noise, not meaningful signals.
+        _now_raw = get_utc_now()
+        _candle_seconds_raw = get_seconds_since_5m_start(_now_raw)
+        if 5 <= _candle_seconds_raw <= 285:
+            try:
+                _c = consensus or {}
+                await asyncio.to_thread(
+                    self.tracker.record_signal_raw,
+                    asset, token, order_price, confidence, trigger_minute, _candle_seconds_raw,
+                    _c.get('bybit_dir', ''), _c.get('cb_dir', ''), _c.get('cl_dir', ''), _c.get('agree', ''),
+                )
+            except Exception:
+                pass
+
         if not stats or not stats.should_trade:
             bar_start = get_current_5m_bar_ts(time.time())
             if self._no_stats_last_bar.get(asset) != bar_start:
@@ -1639,22 +1653,6 @@ class OrderManager:
             confidence, historical_avg, order_price,
             edge_pct, required_edge
         )
-
-        # Record pre-edge signal — captures every aligned+fairvalue signal regardless of edge.
-        try:
-            c = consensus or {}
-            await asyncio.to_thread(
-                self.tracker.record_signal_raw,
-                asset, token, order_price, confidence, trigger_minute, candle_seconds,
-                c.get('bybit_dir', ''), c.get('cb_dir', ''), c.get('cl_dir', ''), c.get('agree', ''),
-            )
-            logger.info(
-                f"📍 validate_adjust_price {asset:>8} | Raw signal | tm={trigger_minute} "
-                f"s={candle_seconds} | {token} @ {order_price:.4f} | "
-                f"bybit={c.get('bybit_dir','')} cb={c.get('cb_dir','')}"
-            )
-        except Exception:
-            pass
 
         # Edge check applies to ALL windows including 270-285s late entries.
         # time_multiplier is ~1.49x at 280s so late trades naturally need stronger edge.
