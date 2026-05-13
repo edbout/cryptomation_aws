@@ -909,17 +909,20 @@ class OrderManager:
             consensus: Optional[dict] = None,
         ) -> Optional[Dict[str, Any]]:
         """Place limit order with price validation. Retries only on PolyApiException FOK errors."""
-        # Concurrent position cap — prevent over-exposure during correlated macro moves
+        # 5-minute order cap — prevent over-exposure during correlated macro moves.
+        # Lightweight Redis counter that auto-resets at the next 5-minute boundary.
+        order_count_key = "bot:order_count:5m"
         try:
-            open_positions = self.position_manager.get_active_positions()
-            if len(open_positions) >= Config.MAX_CONCURRENT_POSITIONS:
+            current_count = self.redis.get(order_count_key)
+            current_count = int(current_count) if current_count else 0
+            if current_count >= Config.MAX_CONCURRENT_POSITIONS:
                 logger.info(
-                    f"✗ safe_place_order | {asset} | concurrent cap reached "
-                    f"({len(open_positions)}/{Config.MAX_CONCURRENT_POSITIONS}) — skipping"
+                    f"✗ safe_place_order | {asset} | 5m order cap reached "
+                    f"({current_count}/{Config.MAX_CONCURRENT_POSITIONS}) — skipping"
                 )
                 return None
         except Exception:
-            pass  # don't block trading if position fetch fails
+            pass  # don't block trading if redis fetch fails
 
         max_retries = 3
         retry_count = 0
@@ -945,7 +948,7 @@ class OrderManager:
                 order_price = max(round(price * 0.999, 2), Config.PRICE_MIN)
                 if order_price >= 1.0:
                     # Polymarket mid near 1.0 means market has resolved — skip cleanly
-                    logger.debug(f"✗ safe_place_order | {asset} near-resolved (mid={price:.4f} → order_price={order_price}) — skip")
+                    logger.warning(f"✗ safe_place_order | {asset} near-resolved (mid={price:.4f} → order_price={order_price}) — skip")
                     return None
 
                 # Forward open_price to validation
@@ -1033,6 +1036,16 @@ class OrderManager:
 
                 # Handle success
                 if response and response.get("success"):
+                    # Bump 5m order counter; first hit in the window sets the TTL
+                    # so the key auto-expires at the next 5-minute boundary.
+                    try:
+                        new_count = self.redis.incr(order_count_key)
+                        if new_count == 1:
+                            ttl = 300 - get_seconds_since_5m_start()
+                            self.redis.expire(order_count_key, ttl if ttl > 0 else 300)
+                    except Exception:
+                        pass  # counter is best-effort, never block the trade
+
                     result = response.get("result", {})
                     status = result.get("status", "")
                     
@@ -1501,12 +1514,12 @@ class OrderManager:
         stats = self.tracker.minute_stats(asset, trigger_minute)
 
         if order_price > Config.PRICE_MAX:
-            logger.debug("✗ validate_adjust_price %-8s | tm=%d | order_price=%.4f > max=%.4f | skipped",
+            logger.info("✗ validate_adjust_price %-8s | tm=%d | order_price=%.4f > max=%.4f | skipped",
                         asset, trigger_minute, order_price, Config.PRICE_MAX)
             return None
 
         if order_price < Config.PRICE_MIN:
-            logger.debug("✗ validate_adjust_price %-8s | tm=%d | order_price=%.4f < min=%.4f | skipped",
+            logger.info("✗ validate_adjust_price %-8s | tm=%d | order_price=%.4f < min=%.4f | skipped",
                         asset, trigger_minute, order_price, Config.PRICE_MIN)
             return None
 
@@ -1603,13 +1616,14 @@ class OrderManager:
 
         # Dead zone and closing zone — hard exits
         if candle_seconds < 5:
-            logger.debug(
+            logger.info(
                 f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
                 f"s={candle_seconds} | dead zone (feed lag)"
             )
             return None
+        
         if candle_seconds > 285:
-            logger.debug(
+            logger.info(
                 f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
                 f"s={candle_seconds} | closing zone (exec lag)"
             )
