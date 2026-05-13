@@ -63,8 +63,8 @@ class Config:
     # Risk: max simultaneous open positions across all assets
     MAX_CONCURRENT_POSITIONS = int(os.getenv("MAX_CONCURRENT_POSITIONS", "2"))
 
-    # Risk: global daily drawdown stop (fraction of bankroll)
-    MAX_GLOBAL_DAILY_LOSS_PCT = float(os.getenv("MAX_GLOBAL_DAILY_LOSS_PCT", "0.25"))
+    # Risk: global 8-hour drawdown stop (fraction of bankroll)
+    MAX_GLOBAL_8H_LOSS_PCT = float(os.getenv("MAX_GLOBAL_8H_LOSS_PCT", "0.25"))
 
     # OBI veto thresholds per asset (absolute value; signal contradicted when exceeded).
     # Raised for ETH/XRP/SOL: Bybit books are structurally ask-heavy during rallies,

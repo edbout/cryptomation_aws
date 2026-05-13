@@ -1494,20 +1494,25 @@ async def check_trading_ready() -> bool:
     if Config.DRY_RUN:
         return True
     try:
-        # Global daily drawdown stop — halt all trading if total losses exceed threshold
-        today = get_utc_now().strftime("%Y-%m-%d")
-        total_daily_loss = sum(
-            float(rdb.get(f"daily_loss:{asset}:{today}") or 0)
+        # Global 8h drawdown stop — halt all trading if total losses exceed threshold in current 8h window
+        _now = get_utc_now()
+        _bucket_hour = (_now.hour // 8) * 8
+        _bucket = f"{_now.strftime('%Y-%m-%d')}-{_bucket_hour:02d}"
+        total_window_loss = sum(
+            float(rdb.get(f"loss_8h:{asset}:{_bucket}") or 0)
             for asset in Config.ASSETS
         )
-        max_global_loss = Config.KELLY_BANKROLL * Config.MAX_GLOBAL_DAILY_LOSS_PCT
-        if total_daily_loss >= max_global_loss:
-            logger.warning(
-                f"🛑 check_trading_ready | Global daily loss ${total_daily_loss:.2f} >= ${max_global_loss:.2f} — suspending all trading"
-            )
-            await send_alert(
-                f"🛑 <b>Global drawdown stop</b>\nTotal daily loss: ${total_daily_loss:.2f} / limit ${max_global_loss:.2f}\nAll trading suspended for today"
-            )
+        max_global_loss = Config.KELLY_BANKROLL * Config.MAX_GLOBAL_8H_LOSS_PCT
+        if total_window_loss >= max_global_loss:
+            # Log/alert only once per 8h window
+            alert_key = f"global_loss_8h_alerted:{_bucket}"
+            if rdb.set(alert_key, "1", nx=True, ex=8 * 3600):
+                logger.warning(
+                    f"🛑 check_trading_ready | Global 8h loss ${total_window_loss:.2f} >= ${max_global_loss:.2f} — suspending all trading"
+                )
+                await send_alert(
+                    f"🛑 <b>Global drawdown stop</b>\nTotal 8h loss: ${total_window_loss:.2f} / limit ${max_global_loss:.2f}\nAll trading suspended for this 8h window"
+                )
             return False
 
         return await asyncio.wait_for(balance_check(), timeout=5.0)

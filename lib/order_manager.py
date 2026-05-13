@@ -647,10 +647,13 @@ class OrderManager:
                 return
             pnl_usd = filled_value - entry_price * filled_shares
             if pnl_usd < 0:
-                daily_key = f"daily_loss:{asset}:{get_utc_now().strftime('%Y-%m-%d')}"
-                self.redis.incrbyfloat(daily_key, abs(pnl_usd))
-                self.redis.expire(daily_key, 86400 * 2)
-                logger.debug(f"📊 _track_close_pnl | {asset} loss=${abs(pnl_usd):.2f} added to {daily_key}")
+                _now = get_utc_now()
+                _bucket_hour = (_now.hour // 8) * 8
+                _bucket = f"{_now.strftime('%Y-%m-%d')}-{_bucket_hour:02d}"
+                loss_key = f"loss_8h:{asset}:{_bucket}"
+                self.redis.incrbyfloat(loss_key, abs(pnl_usd))
+                self.redis.expire(loss_key, 8 * 3600 * 2)
+                logger.debug(f"📊 _track_close_pnl | {asset} loss=${abs(pnl_usd):.2f} added to {loss_key}")
             # Rolling live PnL (last 20 trades) for in-loop awareness
             live_key = f"stats:live_pnl:{asset}"
             self.redis.lpush(live_key, round(pnl_usd, 4))
@@ -1483,17 +1486,25 @@ class OrderManager:
                         f"should_trade=False ({reason}) | avg_price={avg_price:.3f} — skip")
             return None
         
-        # Daily loss circuit breaker — pause asset if it lost >15% of bankroll today
-        daily_key = f"daily_loss:{asset}:{get_utc_now().strftime('%Y-%m-%d')}"
-        daily_loss = float(self.redis.get(daily_key) or 0)
+        # 8-hour loss circuit breaker — pause asset if it lost >15% of bankroll in the current 8h window
+        _now = get_utc_now()
+        _bucket_hour = (_now.hour // 8) * 8
+        _bucket = f"{_now.strftime('%Y-%m-%d')}-{_bucket_hour:02d}"
+        loss_key = f"loss_8h:{asset}:{_bucket}"
+        window_loss = float(self.redis.get(loss_key) or 0)
         live_bankroll_str = self.redis.get("bot:live_bankroll")
         live_bankroll = float(live_bankroll_str) if live_bankroll_str else Config.KELLY_BANKROLL
-        max_daily_loss = live_bankroll * 0.15
-        if daily_loss >= max_daily_loss:
-            logger.info(
-                f"🛑 validate_adjust_price {asset} | Daily loss ${daily_loss:.2f} >= limit ${max_daily_loss:.2f} — pausing"
-            )
-            _tg_alert(f"⚠️ <b>Daily loss limit hit</b> for {asset}\nLoss: ${daily_loss:.2f} / limit ${max_daily_loss:.2f} — trading paused for today")
+        max_window_loss = live_bankroll * 0.15
+        if window_loss >= max_window_loss:
+            # Log/alert only once per 8h window per asset
+            alert_key = f"loss_8h_alerted:{asset}:{_bucket}"
+            if self.redis.client.set(alert_key, "1", nx=True, ex=8 * 3600):
+                logger.info(
+                    f"🛑 validate_adjust_price {asset} | 8h loss ${window_loss:.2f} >= limit ${max_window_loss:.2f} — pausing"
+                )
+                asyncio.create_task(_tg_alert_async(
+                    f"⚠️ <b>8h loss limit hit</b> for {asset}\nLoss: ${window_loss:.2f} / limit ${max_window_loss:.2f} — trading paused for this 8h window"
+                ))
             return None
 
         active_asset_key = f"active_{token_id}"
