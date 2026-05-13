@@ -1637,6 +1637,7 @@ async def main():
     # Clear orders + start background threads
     await order_mgr.clear_open_orders()
     await asyncio.to_thread(price_tracker.run, limit=5)
+    await order_mgr.fast_approve("COLLATERAL")
     
     # START feeds AFTER initialization
     coinbase_feed.start()

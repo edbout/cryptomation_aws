@@ -151,12 +151,12 @@ def load_fairvalue_history(asset: str, max_count: int = 50000) -> List[Dict]:
 
 
 def get_assets() -> List[str]:
-    """Discover assets from prices:signals:* keys."""
-    keys = rdb.keys("prices:signals:*")
+    """Discover assets from all price key namespaces."""
     assets = set()
-    for k in keys:
-        k_str = k.decode() if isinstance(k, bytes) else k
-        assets.add(k_str.split(":")[-1])
+    for pattern in ("prices:signals:*", "prices:signals_raw:*", "prices:fairvalue:*"):
+        for k in rdb.keys(pattern):
+            k_str = k.decode() if isinstance(k, bytes) else k
+            assets.add(k_str.split(":")[-1])
     return sorted(assets)
 
 

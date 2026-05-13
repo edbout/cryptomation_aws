@@ -599,7 +599,7 @@ class PriceTracker:
         """
         normalized = normalize_asset(asset) if not asset.endswith('USDT') else asset
         sig_key = f"prices:signals:{normalized}"
-        if self.rdb.zcard(sig_key) >= 10:
+        if self.rdb.zcard(sig_key) >= 50:
             return False
 
         raw_key = f"prices:signals_raw:{normalized}"
@@ -666,11 +666,11 @@ class PriceTracker:
                 if details:
                     self.print_asset_detail(summary)
 
-                if summary['entries'] >= 10:
+                if summary['entries'] >= 50:
                     self.cache_trade_stats(summary)
                     summaries.append(summary)
                 else:
-                    # No real signal history yet — seed from raw signals to unblock trading
+                    # Fewer than 50 real trades — seed from raw signals (more data, better per-minute stats)
                     self.seed_stats_from_raw(asset)
             except Exception as e:
                 logger.error(f"✗ {asset}: {e}")
