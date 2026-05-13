@@ -397,11 +397,22 @@ class OrderManager:
             return False
         
         def _extract_error_msg(error_obj) -> str:
-            if hasattr(error_obj, "error_message") and error_obj.error_message:
-                error = error_obj.error_message.get("error", "")
-                if isinstance(error, str):
-                    return _classify_error(error)
-            return "Unknown API error"
+            # PolyApiException stores its payload as .error_msg (dict) not .error_message.
+            # Check both to avoid silently falling through to the "Unknown API error" catch-all.
+            for attr in ("error_msg", "error_message"):
+                payload = getattr(error_obj, attr, None)
+                if payload:
+                    if isinstance(payload, dict):
+                        error = payload.get("error", "")
+                        if isinstance(error, str) and error:
+                            return _classify_error(error)
+                    elif isinstance(payload, str) and payload:
+                        return _classify_error(payload)
+            # Log full detail so the actual rejection reason is visible
+            status = getattr(error_obj, "status_code", "?")
+            raw = repr(error_obj)[:120]
+            logger.debug(f"close_position_by_token | unclassified API response status={status}: {raw}")
+            return f"Unknown API error (status={status})"
 
         def _classify_error(error_str: str) -> str:
             error_lower = error_str.lower()
@@ -420,12 +431,19 @@ class OrderManager:
 
         def _is_non_retryable(error_msg: str) -> bool:
             # NOTE: partial fill intentionally excluded — on close any fill is progress
+            # NOTE: "insufficient balance or allowance" is NOT listed here; it is handled
+            #       separately below by calling fast_approve() before the next attempt.
             non_retryable = [
                 "duplicate order rejected",
-                "insufficient balance or allowance",
-                "insufficient balance",
             ]
             return any(msg in error_msg.lower() for msg in non_retryable)
+
+        def _is_allowance_error(error_msg: str) -> bool:
+            return any(kw in error_msg.lower() for kw in (
+                "insufficient balance or allowance",
+                "insufficient balance",
+                "not enough balance",
+            ))
 
         if Config.DRY_RUN:
             exit_price = 0.0
@@ -565,24 +583,40 @@ class OrderManager:
                             )
                     else:
                         error_msg = _extract_error_msg(response)
-                        if _is_non_retryable(error_msg):
+                        if _is_allowance_error(error_msg):
+                            logger.warning(
+                                f"🔑 close_position_by_token {asset} | Allowance error on attempt {attempt+1}/3 "
+                                f"— refreshing approvals and retrying | {error_msg}"
+                            )
+                            await self.fast_approve("COLLATERAL")
+                            await self.fast_approve("CONDITIONAL", token_id)
+                        elif _is_non_retryable(error_msg):
                             logger.error(f"✗ close_position_by_token {asset} | Non-retryable: {error_msg}")
                             break
-                        logger.warning(
-                            f"🌐 close_position_by_token {asset} | {type_str} fail "
-                            f"{attempt+1}/3 ({exec_time:.1f}s): {error_msg}"
-                        )
+                        else:
+                            logger.warning(
+                                f"🌐 close_position_by_token {asset} | {type_str} fail "
+                                f"{attempt+1}/3 ({exec_time:.1f}s): {error_msg}"
+                            )
 
                 except PolyApiException as api_e:
                     exec_time = time.time() - start_time
                     error_msg = _extract_error_msg(api_e)
-                    if _is_non_retryable(error_msg):
+                    if _is_allowance_error(error_msg):
+                        logger.warning(
+                            f"🔑 close_position_by_token {asset} | Allowance error on attempt {attempt+1}/3 "
+                            f"— refreshing approvals and retrying | {error_msg}"
+                        )
+                        await self.fast_approve("COLLATERAL")
+                        await self.fast_approve("CONDITIONAL", token_id)
+                    elif _is_non_retryable(error_msg):
                         logger.error(f"✗ close_position_by_token {asset} | API non-retryable: {error_msg}")
                         break
-                    logger.warning(
-                        f"🌐 close_position_by_token {asset} | {type_str} API fail "
-                        f"{attempt+1}/3 ({exec_time:.1f}s): {error_msg}"
-                    )
+                    else:
+                        logger.warning(
+                            f"🌐 close_position_by_token {asset} | {type_str} API fail "
+                            f"{attempt+1}/3 ({exec_time:.1f}s): {error_msg}"
+                        )
 
                 # Flat 0.5s between attempts — fast enough for position management
                 if attempt < len(CLOSE_ATTEMPTS) - 1:
@@ -1411,15 +1445,32 @@ class OrderManager:
                 )
 
             except PolyApiException as e:
-                error_msg = (
-                    e.error_message.get("error", str(e))
-                    if hasattr(e, "error_message")
-                    else str(e)
-                )
+                # Resolve error message from whichever attribute PolyApiException uses
+                _payload = getattr(e, "error_msg", None) or getattr(e, "error_message", None)
+                if isinstance(_payload, dict):
+                    error_msg = _payload.get("error", str(e))
+                elif isinstance(_payload, str):
+                    error_msg = _payload
+                else:
+                    error_msg = str(e)
                 if "not enough balance" in error_msg.lower():
                     logger.warning(
-                        f"⚠️ place_tp_orders {asset_label:>8} | skipped - {error_msg[:100]}..."
+                        f"⚠️ place_tp_orders {asset_label:>8} | Allowance error — refreshing and retrying TP | {error_msg[:100]}"
                     )
+                    await self.fast_approve("COLLATERAL")
+                    await self.fast_approve("CONDITIONAL", token_id)
+                    # Re-attempt: place a new TP order after approval refresh
+                    try:
+                        signed2 = self.client.create_order(args)
+                        resp2 = self.client.post_order(signed2, OrderType.GTD)
+                        status2 = resp2.get("status", "?")
+                        error2 = resp2.get("errorMsg", "")
+                        logger.info(
+                            f"⏳ place_tp_orders {asset_label:>8} | TP retry after approval | "
+                            f"mid={current_mid:.3f} | [{status2}:{error2}]"
+                        )
+                    except Exception as retry_e:
+                        logger.error(f"✗ place_tp_orders {asset_label:>8} | TP retry failed: {retry_e}")
                 else:
                     logger.error(f"✗ place_tp_orders {asset_label:>8} | {error_msg}")
             except Exception as e:
@@ -1481,9 +1532,27 @@ class OrderManager:
                 win_rate = getattr(stats, 'win_rate', 0.0) if stats else 0.0
                 avg_price = getattr(stats, 'avg_price', 0.0) if stats else 0.0
                 count = getattr(stats, 'count', 0) if stats else 0
-                reason = "no stats" if not stats else f"win_rate={win_rate:.1f}% count={count}"
-                logger.info(f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
-                        f"should_trade=False ({reason}) | avg_price={avg_price:.3f} — skip")
+                if not stats:
+                    # No stats key at all — asset has no resolved signal history in Redis.
+                    # This means seed_stats_from_raw found no raw resolved signals for this asset.
+                    # Trading will unlock automatically once ≥10 outcomes are recorded.
+                    logger.warning(
+                        f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
+                        f"should_trade=False (no Redis stats — asset needs ≥10 resolved outcomes to trade) — skip"
+                    )
+                elif count < 5:
+                    # Stats exist but this specific trigger_minute has too few samples (need ≥5).
+                    logger.info(
+                        f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
+                        f"should_trade=False (count={count} < 5 for M{trigger_minute}) | "
+                        f"win_rate={win_rate:.1f}% avg_price={avg_price:.3f} — skip"
+                    )
+                else:
+                    reason = f"win_rate={win_rate:.1f}% count={count}"
+                    logger.info(
+                        f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
+                        f"should_trade=False ({reason}) | avg_price={avg_price:.3f} — skip"
+                    )
             return None
         
         # 8-hour loss circuit breaker — pause asset if it lost >15% of bankroll in the current 8h window
@@ -2017,10 +2086,10 @@ class OrderManager:
                     return
 
                 elif pnl_pct <= -sl_pct:
-                    logger.info(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (<= -{sl_pct:.1f}%) | Closing {market_slug}")
+                    logger.info(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (≤ -{sl_pct:.1f}%) | Closing {market_slug}")
                     self.redis.hincrby(f"stats:trade:{asset}", "sl", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="sl")
-                    asyncio.create_task(_tg_alert_async(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (<= -{sl_pct:.1f}%) | Closing {market_slug}"))
+                    asyncio.create_task(_tg_alert_async(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (≤ -{sl_pct:.1f}%) | Closing {market_slug}"))
                     return
 
                 elif max_pnl_pct > 15 and pnl_pct <= trailing_stop_pct:

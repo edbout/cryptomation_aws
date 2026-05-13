@@ -20,19 +20,32 @@ async def send_alert(message: str) -> None:
     try:
         logger.debug(f"📤 Sending Telegram: {message[:50]}...")
         async with aiohttp.ClientSession() as session:
+            # First attempt: send with HTML parse mode
             async with session.post(
                 url,
                 json={"chat_id": _CHAT_ID, "text": message, "parse_mode": "HTML"},
-                timeout=aiohttp.ClientTimeout(total=10),  # Slightly longer
+                timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 text = await resp.text()
                 logger.debug(f"📨 Telegram resp: {resp.status} {text[:200]}")
-                if resp.status != 200:
-                    logger.error(f"✗ Telegram failed {resp.status}: {text}")
-                    return  # Or raise if critical
-                data = await resp.json()
-                if not data.get("ok"):
-                    logger.error(f"Telegram API error: {data}")
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    if not data.get("ok"):
+                        logger.error(f"Telegram API error: {data}")
+                    return
+                # Fallback: if Telegram rejected due to HTML parse failure, retry as plain text
+                if resp.status == 400 and "parse entities" in text.lower():
+                    logger.warning(f"✗ Telegram HTML parse error — retrying as plain text: {text[:120]}")
+                    async with session.post(
+                        url,
+                        json={"chat_id": _CHAT_ID, "text": message},
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp2:
+                        text2 = await resp2.text()
+                        if resp2.status != 200:
+                            logger.error(f"✗ Telegram plain-text fallback failed {resp2.status}: {text2}")
+                        return
+                logger.error(f"✗ Telegram failed {resp.status}: {text}")
     except Exception as e:
         logger.error(f"✗ Telegram network error: {e}")
 
@@ -45,10 +58,18 @@ def send_alert_sync(message: str) -> None:
     try:
         import requests
         logger.debug(f"📤 Sending Telegram: {message[:50]}...")
-        requests.post(
+        resp = requests.post(
             url,
             json={"chat_id": _CHAT_ID, "text": message, "parse_mode": "HTML"},
             timeout=5,
         )
+        # Fallback: retry as plain text if HTML parse fails
+        if resp.status_code == 400 and "parse entities" in resp.text.lower():
+            logger.warning(f"✗ Telegram HTML parse error (sync) — retrying as plain text")
+            requests.post(
+                url,
+                json={"chat_id": _CHAT_ID, "text": message},
+                timeout=5,
+            )
     except Exception as e:
         logger.warning(f"✗ Telegram alert (sync) failed: {e}")
