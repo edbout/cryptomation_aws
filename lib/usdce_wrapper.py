@@ -16,6 +16,8 @@ import logging
 from typing import Optional
 from web3 import Web3
 
+from lib.rpc_utils import rpc_manager
+
 logger = logging.getLogger(__name__)
 
 # ─── addresses ──────────────────────────────────────────────────────────
@@ -25,13 +27,7 @@ ONRAMP_ADDRESS = "0x93070a847efEf7F70739046A929D47a521F5B8ee"  # Permissionless 
 
 DECIMALS       = 6           # both USDC.e and pUSD use 6 decimals
 INFINITE       = 2**256 - 1
-GAS_PRICE_GWEI = 500          # matches set_allowances_once.py — Polygon needs juice
-
-RPCS = [
-    "https://1rpc.io/matic",
-    "https://polygon-rpc.com",
-    "https://rpc-mainnet.matic.network",
-]
+GAS_PRICE_GWEI = 500         # matches set_allowances_once.py — Polygon needs juice
 
 ERC20_ABI = [
     {"inputs": [{"name": "owner", "type": "address"}, {"name": "spender", "type": "address"}],
@@ -54,18 +50,6 @@ ONRAMP_ABI = [
 ]
 
 
-def _connect() -> Optional[Web3]:
-    for url in RPCS:
-        try:
-            w3 = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 30}))
-            if w3.is_connected():
-                logger.debug(f"usdce_wrapper | connected via {url}")
-                return w3
-        except Exception:
-            continue
-    return None
-
-
 def wrap_usdce_to_pusd(min_amount_usdc: float = 1.0, timeout: int = 180) -> Optional[str]:
     """
     Sweep the wallet's entire USDC.e balance into pUSD (1:1, no fees).
@@ -82,8 +66,8 @@ def wrap_usdce_to_pusd(min_amount_usdc: float = 1.0, timeout: int = 180) -> Opti
         logger.error("wrap_usdce_to_pusd | PRIVATE_KEY env missing")
         return None
 
-    w3 = _connect()
-    if not w3:
+    w3 = rpc_manager.get_w3(timeout=15)
+    if not w3.is_connected():
         logger.error("wrap_usdce_to_pusd | no RPC available")
         return None
 
