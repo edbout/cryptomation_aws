@@ -215,8 +215,12 @@
           <td class="<%= dir_cls(t[:bar_dir]) %>" style="border-left:1px solid #1e1e1e">
             <%= t[:bar_dir].empty? ? '—' : "#{t[:bar_dir]} #{t[:bar_pct] >= 0 ? '+' : ''}#{t[:bar_pct]}%" %>
           </td>
-          <td class="<%= dir_cls(t[:bar_cb]) %>"><%= t[:bar_cb].empty? ? '—' : t[:bar_cb] %></td>
-          <td class="<%= dir_cls(t[:bar_cl]) %>"><%= t[:bar_cl].empty? ? '—' : t[:bar_cl] %></td>
+          <td class="<%= dir_cls(t[:bar_cb]) %>">
+            <% if t[:bar_cb].empty? %>—<% elsif t[:bar_cb_pct] %><%= t[:bar_cb] %> <%= t[:bar_cb_pct] >= 0 ? '+' : '' %><%= t[:bar_cb_pct] %>%<% else %><%= t[:bar_cb] %><% end %>
+          </td>
+          <td class="<%= dir_cls(t[:bar_cl]) %>">
+            <% if t[:bar_cl].empty? %>—<% elsif t[:bar_cl_pct] %><%= t[:bar_cl] %> <%= t[:bar_cl_pct] >= 0 ? '+' : '' %><%= t[:bar_cl_pct] %>%<% else %><%= t[:bar_cl] %><% end %>
+          </td>
           <td class="dim" style="border-left:1px solid #1e1e1e"><%= t[:bar_agree].empty? ? '—' : t[:bar_agree] %></td>
           <%# Polymarket final %>
           <td class="<%= t[:pm_out] == 'YES' ? 'pos' : (t[:pm_out].empty? ? 'dim' : 'neg') %>" style="border-left:1px solid #1e1e1e">

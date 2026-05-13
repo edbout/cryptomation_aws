@@ -305,6 +305,8 @@ class BybitCandle5m:
         directions = [bybit_dir]
         coinbase_dir = ''
         chainlink_dir = ''
+        cb_pct = None
+        cl_pct = None
 
         try:
             global BYBIT_MANAGER
@@ -338,7 +340,9 @@ class BybitCandle5m:
                 'bar_direction':  bybit_dir,
                 'bar_pct':        round(bar_pct, 3),
                 'bar_coinbase':   coinbase_dir,
+                'bar_cb_pct':     '' if cb_pct is None else round(cb_pct, 3),
                 'bar_chainlink':  chainlink_dir,
+                'bar_cl_pct':     '' if cl_pct is None else round(cl_pct, 3),
                 'bar_consensus':  consensus,
                 'bar_agree':      agree,
                 'bar_updated_at': now_ts,

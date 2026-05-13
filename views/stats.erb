@@ -200,14 +200,14 @@
       <tr>
         <td class="dim"><%= Time.at(r[:ts]).utc.strftime('%m-%d %H:%M') %></td>
         <td class="asset"><%= r[:asset] %></td>
-        <td class="dim"><%= r[:token] %></td>
+        <td class="dim"><%= r[:token].upcase %></td>
         <td class="<%= bybit_cls %>"><%= r[:bybit_pct] > 0 ? '+' : '' %><%= r[:bybit_pct].round(2) %>%</td>
         <td class="dim"><%= r[:pm_price].round(3) %></td>
         <td class="<%= r[:bybit_dir] == 'UP' ? 'good' : 'bad' %>"><%= r[:bybit_dir] %></td>
         <td class="<%= r[:cb_dir] == 'UP' ? 'good' : 'bad' %>"><%= r[:cb_dir] %></td>
         <td class="<%= r[:cl_dir].empty? ? 'dim' : (r[:cl_dir] == 'UP' ? 'good' : 'bad') %>"><%= r[:cl_dir].empty? ? '—' : r[:cl_dir] %></td>
         <td class="dim"><%= r[:agree] %></td>
-        <td class="<%= out_cls %>"><%= r[:outcome] == 'na' ? '…' : r[:outcome] %></td>
+        <td class="<%= out_cls %>"><%= r[:outcome] == 'na' ? '…' : r[:outcome].upcase %></td>
         <td class="<%= result_cls %>"><b><%= result_lbl %></b></td>
       </tr>
       <% end %>

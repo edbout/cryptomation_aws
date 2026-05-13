@@ -29,6 +29,7 @@ from config import RedisCache, Config
 from lib.rpc_utils import RPCManager
 from lib.polymarket_positions import PolymarketPositionManager
 from lib.telegram_alert import send_alert_sync as _tg_alert
+from lib.usdce_wrapper import wrap_usdce_to_pusd
 
 @dataclass
 class RedeemPosition:
@@ -395,6 +396,17 @@ class PolymarketRedeemer:
                 successful += 1
         
         logger.debug(f"run_redeem_pipeline | [DONE] {successful}/{len(positions)} successful")
+
+        # Sweep USDC.e payouts back into pUSD so the bot can keep trading.
+        # Only runs if at least one redeem succeeded — no point burning gas otherwise.
+        if successful > 0:
+            try:
+                tx_hash = wrap_usdce_to_pusd(min_amount_usdc=5.0)
+                if tx_hash:
+                    logger.info(f"✓ run_redeem_pipeline | wrapped USDC.e → pUSD: {tx_hash}")
+            except Exception as e:
+                logger.warning(f"✗ run_redeem_pipeline | wrap_usdce_to_pusd failed: {e}")
+
         return {"status": "success"}
     
     def _print_summary(self, positions, total_value, gas_cost, net_profit):

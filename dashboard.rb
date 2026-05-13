@@ -242,10 +242,12 @@ def load_trades
     entry_time = raw_time[0, 19].tr('T', ' ')
 
     # WebSocket consensus (Bybit/Coinbase/Chainlink) — written at bar close
-    bar_dir  = all['bar_direction'].to_s.upcase   # UP / DOWN
-    bar_pct  = all['bar_pct'].to_f
-    bar_cb   = all['bar_coinbase'].to_s.upcase
-    bar_cl   = all['bar_chainlink'].to_s.upcase
+    bar_dir    = all['bar_direction'].to_s.upcase   # UP / DOWN
+    bar_pct    = all['bar_pct'].to_f
+    bar_cb     = all['bar_coinbase'].to_s.upcase
+    bar_cb_pct = all['bar_cb_pct'].to_s.empty? ? nil : all['bar_cb_pct'].to_f
+    bar_cl     = all['bar_chainlink'].to_s.upcase
+    bar_cl_pct = all['bar_cl_pct'].to_s.empty? ? nil : all['bar_cl_pct'].to_f
     bar_con  = all['bar_consensus'].to_s.upcase   # consensus direction
     bar_agree = all['bar_agree'].to_s             # e.g. "2/3"
 
@@ -272,7 +274,9 @@ def load_trades
       bar_dir:    bar_dir,
       bar_pct:    bar_pct,
       bar_cb:     bar_cb,
+      bar_cb_pct: bar_cb_pct,
       bar_cl:     bar_cl,
+      bar_cl_pct: bar_cl_pct,
       bar_con:    bar_con,
       bar_agree:  bar_agree,
       pm_out:     pm_out,
