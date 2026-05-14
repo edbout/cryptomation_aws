@@ -261,4 +261,16 @@
           <td class="dim">$<%= r[:sell_usdc] %></td>
           <td class="<%= r[:redeem_usdc] > 0 ? "pos" : "dim" %>">$<%= r[:redeem_usdc] %></td>
           <td class="<%= r[:pnl] >= 0 ? "pos" : "neg" %>">
-            <%= r[:pnl] >= 0 ? "+"
+            <%= r[:pnl] >= 0 ? "+" : "" %>$<%= r[:pnl].abs %>
+          </td>
+        </tr>
+        <% end %>
+        <% if data[:daily].empty? %>
+        <tr><td colspan="8" style="color:#333;text-align:center;padding:20px">No data</td></tr>
+        <% end %>
+      </tbody>
+    </table>
+  </details>
+
+</body>
+</html>

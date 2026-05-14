@@ -260,4 +260,103 @@ def analyse_asset(asset: str, records: List[Dict]) -> None:
         _print_sim(res_lm, "low-momentum (no boost)")
 
     # Recommendation - the segmented test mirrors the live boost logic.
-    delta_ev
+    delta_ev  = res_segmented["ev_per_trade"] - res_no_boost["ev_per_trade"]
+    delta_pnl = res_segmented["total_pnl"]    - res_no_boost["total_pnl"]
+    print(f"\n  VERDICT for {asset.upper()} (segmented vs no-boost):")
+    if delta_ev > 0.005:
+        print(f"  [PASS] Boost IMPROVES EV by ${delta_ev:.4f}/trade (${delta_pnl:.2f} total) -> keep boost")
+    elif delta_ev < -0.005:
+        print(f"  [FAIL] Boost HURTS EV by ${abs(delta_ev):.4f}/trade (${abs(delta_pnl):.2f} total) -> reconsider boost")
+    else:
+        print(f"  [NEUT] Boost has negligible effect (dEV=${delta_ev:.4f}/trade) -> inconclusive")
+
+
+def _print_comparison(left: Dict, right: Dict, left_label: str, right_label: str) -> None:
+    print(f"  {'':20} {left_label:>12}  {right_label:>12}  {'Delta':>10}")
+    print(f"  {'':20} {'-'*12}  {'-'*12}  {'-'*10}")
+    for field, fmt in [
+        ("trades",       "{:>12d}"),
+        ("win_rate",     "{:>12.1%}"),
+        ("avg_bet",      "{:>12.2f}"),
+        ("ev_per_trade", "{:>12.4f}"),
+        ("total_pnl",    "{:>12.2f}"),
+        ("pnl_std",      "{:>12.4f}"),
+        ("clamp_min",    "{:>12d}"),
+        ("clamp_max",    "{:>12d}"),
+    ]:
+        v1 = left[field]
+        v2 = right[field]
+        delta = v2 - v1 if isinstance(v1, float) else ""
+        d_str = f"{delta:>+10.4f}" if isinstance(delta, float) else f"{'':>10}"
+        print(f"  {field:<20} {fmt.format(v1)}  {fmt.format(v2)}  {d_str}")
+
+
+def _print_sim(res: Dict, label: str) -> None:
+    print(f"  {label}")
+    for field, fmt in [
+        ("trades",       "{:>12d}"),
+        ("win_rate",     "{:>12.1%}"),
+        ("ev_per_trade", "{:>12.4f}"),
+        ("total_pnl",    "{:>12.2f}"),
+        ("clamp_min",    "{:>12d}"),
+        ("clamp_max",    "{:>12d}"),
+    ]:
+        print(f"    {field:<18} {fmt.format(res[field])}")
+
+
+def _discover_assets(source: str) -> List[str]:
+    patterns = []
+    if source in ("signals", "both"):
+        patterns.append(("prices:signals:",     "prices:signals:*"))
+    if source in ("raw", "both"):
+        patterns.append(("prices:signals_raw:", "prices:signals_raw:*"))
+
+    found = set()
+    for prefix, pattern in patterns:
+        for k in rdb.keys(pattern):
+            # Skip prices:signals_raw:* when scanning prices:signals:*
+            if prefix == "prices:signals:" and k.startswith("prices:signals_raw:"):
+                continue
+            if k.startswith(prefix):
+                found.add(k[len(prefix):])
+    return sorted(found)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Kelly boost EV backtester")
+    parser.add_argument("--asset", help="Single asset to analyse (e.g. BTCUSDT). Default: all.")
+    parser.add_argument("--source", choices=("signals", "raw", "both"), default="signals",
+                        help="Which Redis dataset to read: gated 'signals' (default), 'raw' (pre-edge), or 'both'.")
+    parser.add_argument("--min-signals", type=int, default=30, help="Minimum resolved signals to include asset")
+    args = parser.parse_args()
+
+    if args.asset:
+        assets = [args.asset]
+    else:
+        assets = _discover_assets(args.source)
+
+    if not assets:
+        print(f"No matching Redis keys found for source={args.source}. Run the bot first to collect history.")
+        sys.exit(1)
+
+    print(f"\nKelly Boost EV Backtest")
+    print(f"  Bankroll: ${BANKROLL}  |  Kelly fraction: {KELLY_FRACTION}  |  Min bet: ${KELLY_MIN_BET}  |  Max bet: ${KELLY_MAX_BET}")
+    print(f"  Boost factor tested: {BOOST_FACTOR}x  |  High-momentum threshold: {HIGH_MOM_PCT}% (abs pct)")
+    print(f"  Source: {args.source}")
+    print(f"  Assets: {assets}")
+
+    for asset in assets:
+        records = load_all(asset, args.source)
+        if len(records) < args.min_signals:
+            print(f"\n  {asset}: {len(records)} resolved signals (< {args.min_signals} min) - skipping")
+            continue
+        analyse_asset(asset, records)
+
+    print(f"\n{'='*60}")
+    print("Done. Use results to adjust boost multipliers in main.py get_kelly_boost().")
+    print("  File: main.py  BybitManager.get_kelly_boost (search for `def get_kelly_boost`)")
+    print()
+
+
+if __name__ == "__main__":
+    main()

@@ -1682,4 +1682,37 @@ async def main():
     try:
         await sched_task
     except asyncio.CancelledError:
-        logger.info("🛑 main | Cancelled - cleaning 
+        logger.info("🛑 main | Cancelled - cleaning up")
+    finally:
+        logger.info("🔄 main | Shutting down...")
+        
+        # Sequential cleanup (Bybit first, then feeds)
+        if BYBIT_MANAGER:
+            BYBIT_MANAGER.stop()
+            logger.info("✓ main | Bybit feed stopped")
+            BYBIT_MANAGER = None  # Clear global
+
+        # Stop feeds (they have their own task.cancel())
+        if coinbase_feed:
+            coinbase_feed.stop()
+            logger.info("✓ main | Coinbase feed stopped")
+        if chainlink_feed:
+            chainlink_feed.stop()
+            logger.info("✓ main | Chainlink feed stopped")
+
+        # Final resource cleanup
+        if 'rdb' in globals():
+            rdb.close()
+            logger.info("✓ main | Redis closed")
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("👋 main | Stopped by user (Ctrl+C)")
+    except asyncio.TimeoutError:
+        logger.warning("⏰ main | Task limit exceeded")
+    except Exception as e:         
+        logger.error(f"💥 main | Crashed: {e}", exc_info=True)
+    finally:
+        logger.info("✓ main | Shutdown complete")

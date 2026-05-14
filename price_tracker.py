@@ -775,4 +775,5 @@ def main():
     tracker = PriceTracker()
     tracker.run(limit=5, details=True)
 
-if __name__ == "__mai
+if __name__ == "__main__":
+    main()

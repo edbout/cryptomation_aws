@@ -163,4 +163,13 @@ class RedisCache:
         try:
             if self.client.ping():
                 return True
-        except Exce
+        except Exception as e:
+            logger.error(f"✗ ping | failed: {e}")
+            self.client = None
+        return False
+
+    def __getattr__(self, name):
+        if self.client:
+            return getattr(self.client, name)
+        raise AttributeError(f"✗ getattr | Redis client unavailable; cannot call: {name}")
+    
