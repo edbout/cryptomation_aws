@@ -454,18 +454,4 @@ def run_redeem_non_interactive(mode: str = "high_gas", verbose_cache: bool = Fal
     global _redeemer
     try:
         if _redeemer is None:
-            _redeemer = PolymarketRedeemer(mode=mode, verbose_cache=verbose_cache)
-
-        positions = _redeemer._pm_eoa.get_active_positions()
-        if not positions:
-            positions = _redeemer._pm_proxy.get_active_positions()
-        _redeemer.show_active_positions_dashboard(positions=positions)
-        result = _redeemer.run_redeem_pipeline(auto_confirm=True, positions=positions)
-        return result
-
-    except Exception as e:
-        _redeemer = None  # force re-init on next call if something went wrong
-        return {"status": "error", "count": 0, "value": 0.0, "message": str(e)}
-
-if __name__ == "__main__":
-    main()
+            _redeemer = PolymarketRedeemer(mode=mode, verbose_cache=

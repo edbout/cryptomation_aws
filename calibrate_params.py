@@ -537,10 +537,4 @@ def main():
         print("  bar_open multipliers (applied automatically in _get_hist_params):")
         print(f"    time_window  → min({consensus_tw}*2, 60) = {min(consensus_tw*2, 60)}s")
         print(f"    pct_tol      → min({consensus_pt}*2, 0.20) = {min(consensus_pt*2, 0.20)}")
-        print(f"    min_matches  → max({consensus_mm}//2, 3) = {max(consensus_mm//2, 3)}")
-
-    print("\nDone.\n")
-
-
-if __name__ == "__main__":
-    main()
+        print(f"    min_matches  → max({consensus_mm}//2, 3) = {max(consensus_mm//2, 3)

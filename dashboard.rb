@@ -399,12 +399,3 @@ get '/results' do
   if params[:refresh]
     $results_cache    = nil
     $results_cache_ts = nil
-  end
-  data   = load_results
-  trades = load_trades
-  erb :results, locals: { data: data, start_date: RESULTS_START.to_s, trades: trades }
-end
-
-get '/health' do
-  { ok: true, time: Time.now.utc.iso8601 }.to_json
-end

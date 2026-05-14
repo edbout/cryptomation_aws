@@ -15,6 +15,7 @@ from py_clob_client_v2.exceptions import PolyApiException
 
 from config import Config, RedisCache
 from price_tracker import PriceTracker
+from lib.poly_mid_cache import POLY_MID_CACHE
 from lib.polymarket_positions import PolymarketPositionManager
 from lib.helpers import safe_float, get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts
 from lib.telegram_alert import send_alert as _tg_alert_async, send_alert_sync as _tg_alert
@@ -922,7 +923,7 @@ class OrderManager:
             current_count = int(current_count) if current_count else 0
             if current_count >= Config.MAX_CONCURRENT_POSITIONS:
                 logger.info(
-                    f"✗ safe_place_order | {asset} | 5m order cap reached "
+                    f"✓ safe_place_order | {asset} | 5m order cap reached "
                     f"({current_count}/{Config.MAX_CONCURRENT_POSITIONS}) — skipping"
                 )
                 return None
@@ -933,15 +934,19 @@ class OrderManager:
         retry_count = 0
         while retry_count < max_retries:
             try:
-                # Get current market data
-                price_response = self.client.get_midpoint(token_id)
-                logger.debug(f"price response: {price_response}") # price response: {'mid': '0.945'}
-                
-                if not isinstance(price_response, dict) or 'mid' not in price_response:
-                    logger.error(f"✗ safe_place_order | bad price response: {price_response}")
-                    return None
-                
-                price = float(price_response['mid'])
+                # Get current market mid-price.
+                # Try the in-memory WebSocket cache first (zero latency); fall back
+                # to the HTTP get_midpoint call if the cache has no fresh data yet.
+                price = POLY_MID_CACHE.get(token_id)
+                if price is None:
+                    price_response = self.client.get_midpoint(token_id)
+                    logger.debug(f"✓ price response (HTTP fallback): {price_response}")
+                    if not isinstance(price_response, dict) or 'mid' not in price_response:
+                        logger.error(f"✗ safe_place_order | bad price response: {price_response}")
+                        return None
+                    price = float(price_response['mid'])
+                else:
+                    logger.debug("✓ safe_place_order | %s mid=%.4f (from WS cache)", asset, price)
                 if price <= 0 or price >= 1:
                     logger.warning(f"✗ safe_place_order | invalid price {price} for {asset}")
                     return None
@@ -1002,21 +1007,28 @@ class OrderManager:
                 live_bankroll = float(live_bankroll_str) if live_bankroll_str else Config.KELLY_BANKROLL
                 size = self._calc_kelly_size(_win_rate, order_price, kelly_boost, bankroll=live_bankroll)
                 if size <= 0:
-                    logger.info(
+                    logger.warning(
                         f"✗ safe_place_order | Kelly f*<=0 for {asset} @ {order_price:.3f} "
                         f"(win={_win_rate:.1f}%) — negative EV, skipping"
                     )
                     return None
-                logger.info(
-                    f"💰 safe_place_order | Kelly size ${size:.2f} "
-                    f"(win_rate={_win_rate:.1f}% price={order_price:.4f} "
-                    f"bankroll=${live_bankroll:.0f} frac={Config.KELLY_FRACTION})"
-                )
                 
                 # Validate client integrity
                 if not hasattr(self.client, 'post_order') or not callable(getattr(self.client, 'post_order')):
                     logger.error(f"💥 safe_place_order critical issue | client corrupted...")
                     return None
+                
+                logger.info(
+                    f"💰 safe_place_order | {asset} | {token} | Kelly size ${size:.2f} "
+                    f"(win_rate={_win_rate:.1f}% price={order_price:.4f} "
+                    f"bankroll=${live_bankroll:.0f} frac={Config.KELLY_FRACTION})"
+                )
+                
+                asyncio.create_task(_tg_alert_async(
+                    f"{asset} | {token} | size ${size:.2f} "
+                    f"(win_rate={_win_rate:.1f}% price={order_price:.4f} "
+                    f"bankroll=${live_bankroll:.0f} frac={Config.KELLY_FRACTION})"
+                ))
                 
                 # Execute order based on config
                 if Config.DRY_RUN:
@@ -1168,11 +1180,14 @@ class OrderManager:
             result = None
             error_msg = ""
 
-            # Fetch fresh mid-price each attempt to track market movement between retries
+            # Fetch fresh mid-price each attempt to track market movement between retries.
+            # Use the WebSocket cache first; only hit HTTP if cache has gone stale.
             try:
-                price_resp = await asyncio.to_thread(self.client.get_midpoint, token_id)
-                fresh_mid = float(price_resp.get("mid") or price_resp.get("midpoint") or 0)
-                if fresh_mid > 0:
+                fresh_mid = POLY_MID_CACHE.get(token_id)
+                if fresh_mid is None:
+                    price_resp = await asyncio.to_thread(self.client.get_midpoint, token_id)
+                    fresh_mid = float(price_resp.get("mid") or price_resp.get("midpoint") or 0)
+                if fresh_mid and fresh_mid > 0:
                     base_price = fresh_mid
             except Exception:
                 pass  # keep using last known base_price
@@ -2111,53 +2126,4 @@ class OrderManager:
                     self.redis.hincrby(f"stats:trade:{asset}", "expiry_close", 1)
                     if pnl_pct > 0:
                         self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
-                    await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="expiry")
-                    asyncio.create_task(_tg_alert_async(
-                        f"⏰ Manage positions {asset} EXPIRY CLOSE | {seconds_to_expiry:.0f}s to bar end | "
-                        f"pnl={pnl_pct:+.1f}% | Closing {market_slug} before resolution"))
-                    return
-
-                elif current_price >= tp_price_target:
-                    logger.info(f"🟢 Manage positions {asset} TP HIT price={current_price:.3f} >= {tp_price_target:.3f} | Closing {market_slug}")
-                    self.redis.hincrby(f"stats:trade:{asset}", "tp", 1)
-                    self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
-                    await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="tp")
-                    asyncio.create_task(_tg_alert_async(f"🟢 Manage positions {asset} TP HIT price={current_price:.3f} >= {tp_price_target:.3f} | Closing {market_slug}" ))
-                    return
-
-                elif pnl_pct <= -sl_pct:
-                    logger.info(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (≤ -{sl_pct:.1f}%) | Closing {market_slug}")
-                    self.redis.hincrby(f"stats:trade:{asset}", "sl", 1)
-                    await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="sl")
-                    asyncio.create_task(_tg_alert_async(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (≤ -{sl_pct:.1f}%) | Closing {market_slug}"))
-                    return
-
-                elif max_pnl_pct > 15 and pnl_pct <= trailing_stop_pct:
-                    logger.info(
-                        f"🟠 Manage positions {asset} TRAIL HIT pnl={pnl_pct:.1f}% peak={max_pnl_pct:.1f}% stop={trailing_stop_pct:.1f}% | Closing {market_slug}"
-                    )
-                    self.redis.hincrby(f"stats:trade:{asset}", "trail_stop", 1)
-                    self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
-                    await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="trail")
-                    asyncio.create_task(_tg_alert_async(f"🟠 Manage positions {asset} TRAIL HIT pnl={pnl_pct:.1f}% peak={max_pnl_pct:.1f}% stop={trailing_stop_pct:.1f}% | Closing {market_slug}"))
-                    return
-
-        except Exception as e:
-            logger.error(f"💥 Manage_positions | {market_slug} | {e}", exc_info=True)
-
-    async def _close_with_cleanup(self, asset: str, token_id: str, size: float, cooldown_key: str, reason: str = "manual") -> None:
-        close_success = False
-        try:
-            close_success = await self.close_position_by_token(asset, token_id, size, cooldown_key, reason)
-            if close_success:
-                logger.info(f"✓ close_with_cleanup {asset} | Close success | Success: {close_success}")
-                if cooldown_key:
-                    self.redis.setex(cooldown_key, 300, "1")
-            else:
-                logger.info(f"✗ close_with_cleanup {asset} | Close failed | Success: {close_success}")
-
-        except Exception as e:
-            logger.error(f"✗ close_with_cleanup {asset} | Close failed | {e}")
-        
-        finally:
-            pass
+                    await self._close_with_cleanup(asset, token_id, size, cooldown_key

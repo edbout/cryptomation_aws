@@ -66,6 +66,7 @@ from components import Components
 from redeem import run_redeem_non_interactive
 from lib.helpers import  get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts, normalize_asset
 from lib.telegram_alert import send_alert
+from lib.poly_mid_cache import POLY_MID_CACHE
 
 @dataclass
 class TickData:
@@ -484,6 +485,10 @@ class BybitManager:
             logger.info(
                 f"✓ _refresh_token_cache | {len(new_cache)} assets cached: {list(new_cache.keys())}"
             )
+            # Keep the mid-price cache subscribed to the latest YES token IDs.
+            # Tokens rotate every 5 minutes as Polymarket opens new candle markets.
+            yes_ids = [yes for yes, _ in new_cache.values()]
+            POLY_MID_CACHE.subscribe(yes_ids)
         except Exception as e:
             logger.warning(f"⚠️ _refresh_token_cache | Failed: {e}")
 
@@ -1491,8 +1496,8 @@ async def balance_check():
         # Consider raising PRICE_MAX or NEAR_RESOLVED_THRESHOLD if this grows large relative to trades.
         price_max_skips = int(rdb.get("bot:skip:price_max") or 0)
         logger.info(
-            "💰 balance_check | pUSD: $%.2f | Can trade: %s | price_max_skips: %d (PRICE_MAX=%.2f)",
-            balance, can_trade, price_max_skips, Config.PRICE_MAX,
+            "💰 balance_check | pUSD: $%.2f | Can trade: %s | price_max_skips: %d (PRICE_MAX=%.2f) | mid_cache: %s",
+            balance, can_trade, price_max_skips, Config.PRICE_MAX, POLY_MID_CACHE.stats(),
         )
         if balance < 5.0:
             await send_alert(f"⚠️ <b>Low balance</b>: ${balance:.2f} pUSD\nTrading suspended until topped up")
@@ -1653,6 +1658,8 @@ async def main():
     # START feeds AFTER initialization
     coinbase_feed.start()
     chainlink_feed.start()
+    asyncio.create_task(POLY_MID_CACHE.run())
+    logger.info("✓ main | PolymarketMidCache started")
 
     BYBIT_MANAGER = BybitManager()
     loop = asyncio.get_running_loop()
@@ -1675,37 +1682,4 @@ async def main():
     try:
         await sched_task
     except asyncio.CancelledError:
-        logger.info("🛑 main | Cancelled - cleaning up")
-    finally:
-        logger.info("🔄 main | Shutting down...")
-        
-        # Sequential cleanup (Bybit first, then feeds)
-        if BYBIT_MANAGER:
-            BYBIT_MANAGER.stop()
-            logger.info("✓ main | Bybit feed stopped")
-            BYBIT_MANAGER = None  # Clear global
-
-        # Stop feeds (they have their own task.cancel())
-        if coinbase_feed:
-            coinbase_feed.stop()
-            logger.info("✓ main | Coinbase feed stopped")
-        if chainlink_feed:
-            chainlink_feed.stop()
-            logger.info("✓ main | Chainlink feed stopped")
-
-        # Final resource cleanup
-        if 'rdb' in globals():
-            rdb.close()
-            logger.info("✓ main | Redis closed")
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("👋 main | Stopped by user (Ctrl+C)")
-    except asyncio.TimeoutError:
-        logger.warning("⏰ main | Task limit exceeded")
-    except Exception as e:         
-        logger.error(f"💥 main | Crashed: {e}", exc_info=True)
-    finally:
-        logger.info("✓ main | Shutdown complete")
+        logger.info("🛑 main | Cancelled - cleaning 
