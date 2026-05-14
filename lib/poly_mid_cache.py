@@ -1,83 +1,70 @@
 #!/usr/bin/env python3
-"""Real-time Polymarket mid-price cache backed by a WebSocket subscription.
+"""Real-time Polymarket mid-price cache backed by a CLOB WebSocket subscription.
 
-Instead of calling `client.get_midpoint(token_id)` via HTTP on every order
-attempt (100–400 ms round-trip), this module maintains a live in-memory dict
-  token_id → float (mid-price)
-that is updated by the same wss://ws-live-data.polymarket.com server already
-used for the Chainlink price feed.
+The Polymarket CLOB WebSocket lives at wss://clob.polymarket.com (same host as
+the HTTP API at https://clob.polymarket.com).  It is separate from the
+wss://ws-live-data.polymarket.com server which serves oracle/Chainlink feeds.
+
+Subscription envelope (CLOB WebSocket protocol):
+    {"assets_ids": ["TOKEN_ID_1", "TOKEN_ID_2", ...], "type": "market"}
+
+Server pushes back book snapshots / deltas:
+    {"event_type": "book",  "asset_id": "...", "buys": [...], "sells": [...]}
+    {"event_type": "price_change", "asset_id": "...", "price": "0.74"}
+    {"event_type": "last_trade_price", "asset_id": "...", "price": "0.74"}
 
 Usage
 -----
     from lib.poly_mid_cache import POLY_MID_CACHE
 
-    # Start the feed (call once from the asyncio event loop)
-    asyncio.create_task(POLY_MID_CACHE.run())
-
-    # Tell it which tokens to subscribe to (safe to call at any time)
-    POLY_MID_CACHE.subscribe(["token_id_1", "token_id_2"])
-
-    # Read cached mid (returns None if stale / not yet received → fall back to HTTP)
-    mid = POLY_MID_CACHE.get("token_id_1")
-
-Design notes
-------------
-* Mirrors the ChainlinkFeed pattern from main.py: same WS URL, same subscribe
-  envelope, same reconnect logic.
-* Subscribes to "type": "book" events.  Book snapshots give us best-bid and
-  best-ask so we can compute mid = (best_bid + best_ask) / 2.  We also accept
-  "price_change" and "last_trade_price" events as cheaper alternatives if the
-  server emits them.
-* A cached price is considered stale after STALE_SECS seconds and will cause
-  the caller to fall back to the HTTP get_midpoint call transparently.
-* Token subscriptions can be added at any time; if the socket is already open
-  a re-subscribe message is sent immediately, otherwise they are queued and
-  sent on the next (re)connect.
+    asyncio.create_task(POLY_MID_CACHE.run())          # start once
+    POLY_MID_CACHE.subscribe(["token_id_1", ...])      # call whenever tokens rotate
+    mid = POLY_MID_CACHE.get("token_id_1")             # None → fall back to HTTP
 """
 
 import asyncio
 import json
 import logging
 import time
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set
 
 import websockets
 
-from config import Config
-
 logger = logging.getLogger(__name__)
 
-# Treat a cached price as stale this many seconds after the last WebSocket update.
-# 30 s is conservative — the WS should push book updates every few seconds on
-# active markets.  Callers fall back to HTTP on a stale / missing entry.
+# WebSocket URL — CLOB server (NOT ws-live-data which is oracle-only)
+WS_URL = "wss://clob.polymarket.com"
+
+# Treat a cached price as stale after this many seconds without a WS update.
 STALE_SECS: float = 30.0
+
+# Log raw messages until we've seen this many, to help diagnose subscription issues.
+_RAW_LOG_BURST = 5
 
 
 class PolymarketMidCache:
-    """Live mid-price cache for Polymarket YES tokens.
+    """Live mid-price cache for Polymarket YES tokens via CLOB WebSocket.
 
-    Thread-safety: read (`get`) is safe from any thread; `subscribe` and the
-    internal `_set` are only called from the asyncio event loop.
+    Thread-safety: `get()` is safe from any thread; everything else runs
+    inside the asyncio event loop.
     """
 
     def __init__(self) -> None:
-        self._prices: Dict[str, float] = {}   # token_id → latest mid
-        self._ts: Dict[str, float] = {}        # token_id → epoch of last update
-        self._subscribed: Set[str] = set()     # token_ids the WS is subscribed to
-        self._pending: Set[str] = set()        # queued until next (re)connect
+        self._prices: Dict[str, float] = {}    # token_id → latest mid
+        self._ts: Dict[str, float] = {}         # token_id → epoch of last update
+        self._subscribed: Set[str] = set()      # tokens the WS currently covers
+        self._pending: Set[str] = set()         # queued until next (re)connect
         self._running: bool = False
-        self._hit: int = 0                     # cache hits since startup
-        self._miss: int = 0                    # cache misses (stale / absent)
+        self._hit: int = 0
+        self._miss: int = 0
+        self._raw_seen: int = 0                 # messages received since connect
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
     # ------------------------------------------------------------------ #
 
     def get(self, token_id: str) -> Optional[float]:
-        """Return a fresh cached mid, or None if stale / not yet received.
-
-        None means the caller should fall back to HTTP get_midpoint.
-        """
+        """Return a fresh cached mid, or None (caller should fall back to HTTP)."""
         ts = self._ts.get(token_id)
         if ts is None or (time.time() - ts) > STALE_SECS:
             self._miss += 1
@@ -85,13 +72,12 @@ class PolymarketMidCache:
         self._hit += 1
         return self._prices[token_id]
 
-    def subscribe(self, token_ids: list) -> None:
-        """Queue token_ids for subscription.  Safe to call before run() starts
-        and while the WebSocket is live (sends a fresh subscribe message)."""
+    def subscribe(self, token_ids: List[str]) -> None:
+        """Queue token_ids for subscription.  Safe to call before run() starts."""
         new = set(token_ids) - self._subscribed - self._pending
         if new:
             self._pending.update(new)
-            logger.debug("PolymarketMidCache | queued %d new token(s) for subscription", len(new))
+            logger.debug("PolymarketMidCache | queued %d new token(s)", len(new))
 
     def stats(self) -> str:
         total = self._hit + self._miss
@@ -102,11 +88,11 @@ class PolymarketMidCache:
         )
 
     # ------------------------------------------------------------------ #
-    # Async run loop (mirrors ChainlinkFeed.listen_all)                   #
+    # Async run loop                                                       #
     # ------------------------------------------------------------------ #
 
     async def run(self) -> None:
-        """Connect, subscribe and pump messages — reconnects forever."""
+        """Connect to the CLOB WebSocket and pump messages — reconnects forever."""
         self._running = True
         _retry_count = 0
         _disconnect_ts: Optional[float] = None
@@ -114,30 +100,30 @@ class PolymarketMidCache:
         while self._running:
             try:
                 async with websockets.connect(
-                    Config.WS_URL,
+                    WS_URL,
                     ping_interval=20,
                     ping_timeout=30,
+                    additional_headers={"Origin": "https://polymarket.com"},
                 ) as ws:
                     if _disconnect_ts is not None:
                         down_secs = int(time.time() - _disconnect_ts)
                         logger.info("✓ PolymarketMidCache | reconnected after %ds down", down_secs)
                     _retry_count = 0
                     _disconnect_ts = None
+                    self._raw_seen = 0
 
-                    # Subscribe to everything we know about so far
                     all_tokens = self._subscribed | self._pending
                     if all_tokens:
                         await self._send_subscribe(ws, all_tokens)
-                        self._subscribed = all_tokens
+                        self._subscribed = set(all_tokens)
                         self._pending.clear()
 
                     logger.info(
-                        "✓ PolymarketMidCache | connected to %s (%d tokens subscribed)",
-                        Config.WS_URL, len(self._subscribed),
+                        "✓ PolymarketMidCache | connected to %s (%d tokens)",
+                        WS_URL, len(self._subscribed),
                     )
 
                     async for raw in ws:
-                        # Flush any tokens that arrived while we were iterating
                         if self._pending:
                             await self._send_subscribe(ws, self._pending)
                             self._subscribed |= self._pending
@@ -145,6 +131,16 @@ class PolymarketMidCache:
 
                         if not isinstance(raw, str):
                             continue
+
+                        # Diagnostic burst: log the first N raw messages at INFO
+                        # so we can see exactly what the server sends back.
+                        if self._raw_seen < _RAW_LOG_BURST:
+                            self._raw_seen += 1
+                            logger.info(
+                                "📡 PolymarketMidCache | raw[%d]: %.300s",
+                                self._raw_seen, raw,
+                            )
+
                         try:
                             self._handle_message(raw)
                         except Exception as exc:
@@ -172,7 +168,8 @@ class PolymarketMidCache:
                 _retry_count += 1
                 wait = min(5 * (2 ** (_retry_count - 1)), 60)
                 logger.exception(
-                    "✗ PolymarketMidCache | error (retry #%d in %ds): %r", _retry_count, wait, exc
+                    "✗ PolymarketMidCache | error (retry #%d in %ds): %r",
+                    _retry_count, wait, exc,
                 )
                 await asyncio.sleep(wait)
 
@@ -181,16 +178,12 @@ class PolymarketMidCache:
     # ------------------------------------------------------------------ #
 
     async def _send_subscribe(self, ws, token_ids: Set[str]) -> None:
-        """Send a subscribe message for the given token IDs."""
+        """Send a CLOB market subscription for the given token IDs."""
         if not token_ids:
             return
-        # One subscription entry per token — same envelope as ChainlinkFeed.
         msg = json.dumps({
-            "action": "subscribe",
-            "subscriptions": [
-                {"topic": "market", "type": "book", "filters": tid}
-                for tid in token_ids
-            ],
+            "assets_ids": list(token_ids),
+            "type": "market",
         })
         await ws.send(msg)
         logger.info(
@@ -200,35 +193,29 @@ class PolymarketMidCache:
         )
 
     def _handle_message(self, raw: str) -> None:
-        """Parse a WebSocket message and update the price cache.
-
-        Polymarket's ws-live-data server can push several event shapes.
-        We handle the two most likely ones and ignore the rest silently.
-        """
+        """Parse a server message and update the price cache."""
         data = json.loads(raw)
 
-        # ── Shape 1: flat event  {"event_type": "book", "asset_id": ..., ...} ──
+        # CLOB pushes a list for book snapshots, a dict for single events.
+        if isinstance(data, list):
+            for item in data:
+                self._dispatch(item)
+        elif isinstance(data, dict):
+            self._dispatch(data)
+
+    def _dispatch(self, data: dict) -> None:
         event = data.get("event_type") or data.get("type", "")
-
-        # ── Shape 2: wrapped   {"topic": "market", "payload": {...}} ──
-        if not event and "payload" in data:
-            payload = data["payload"]
-            event = payload.get("event_type") or payload.get("type", "")
-            data = payload  # unwrap so the rest of the parsing is uniform
-
         if event == "book":
             self._update_from_book(data)
         elif event in ("price_change", "last_trade_price", "midpoint"):
             self._update_from_price(data)
-        # heartbeat / unknown topics → silently ignored
+        # heartbeat / unknown events → ignored
 
     def _update_from_book(self, data: dict) -> None:
-        """Compute mid from best bid/ask in a book snapshot or delta."""
         token_id = data.get("asset_id") or data.get("token_id")
         if not token_id:
             return
 
-        # "buys" / "bids" are bids (highest first); "sells" / "asks" are asks (lowest first)
         buys  = data.get("buys")  or data.get("bids")  or []
         sells = data.get("sells") or data.get("asks")  or []
 
@@ -250,7 +237,6 @@ class PolymarketMidCache:
         self._set(token_id, mid)
 
     def _update_from_price(self, data: dict) -> None:
-        """Update from a direct price event (price_change / last_trade_price)."""
         token_id  = data.get("asset_id") or data.get("token_id")
         price_str = data.get("price") or data.get("mid")
         if token_id and price_str:
@@ -260,11 +246,13 @@ class PolymarketMidCache:
                 pass
 
     def _set(self, token_id: str, mid: float) -> None:
-        """Store a mid-price if it is sane (strictly between 0 and 1)."""
         if 0.0 < mid < 1.0:
+            was_new = token_id not in self._prices
             self._prices[token_id] = mid
             self._ts[token_id] = time.time()
+            if was_new:
+                logger.info("✓ PolymarketMidCache | first price for token …%s: %.4f", token_id[-8:], mid)
 
 
-# Module-level singleton — import this everywhere instead of instantiating locally.
+# Module-level singleton — import this everywhere.
 POLY_MID_CACHE = PolymarketMidCache()
