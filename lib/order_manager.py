@@ -972,7 +972,7 @@ class OrderManager:
                     return None
 
                 # Forward open_price to validation
-                order_price = await self._validate_adjust_price(
+                _vap = await self._validate_adjust_price(
                     trigger_minute=trigger_minute,
                     order_price=order_price,
                     asset=asset,
@@ -982,8 +982,10 @@ class OrderManager:
                     consensus=consensus,
                 )
 
-                if order_price is None:
+                if _vap is None:
                     return None
+                order_price = _vap['price']
+                _fair_value = _vap['fair_value']  # historical avg — better Kelly win probability than direction win_rate
                 
                 # CLOB pre-trade check: verify spread and depth on Polymarket's own book
                 clob_ok, clob_reason, est_fill = self._check_clob_liquidity(
@@ -999,17 +1001,20 @@ class OrderManager:
                     return None
                 logger.debug(f"✓ safe_place_order | CLOB ok {asset} {token}: {clob_reason}")
 
-                # Kelly-optimal position sizing — replaces fixed POSITION_SIZE.
-                # minute_stats is already in the in-memory cache from _validate_adjust_price.
+                # Kelly-optimal position sizing.
+                # Use fair_value (historical avg price) as win probability — it is the
+                # best estimate of settlement probability. Direction win_rate measures
+                # Bybit alignment accuracy, not whether the token resolves at $1.
                 _stats = self.tracker.minute_stats(asset, trigger_minute)
                 _win_rate = _stats.win_rate if _stats else Config.MIN_WIN_RATE_THRESHOLD
+                _kelly_win_rate = max(_win_rate, _fair_value * 100)
                 live_bankroll_str = self.redis.get("bot:live_bankroll")
                 live_bankroll = float(live_bankroll_str) if live_bankroll_str else Config.KELLY_BANKROLL
-                size = self._calc_kelly_size(_win_rate, order_price, kelly_boost, bankroll=live_bankroll)
+                size = self._calc_kelly_size(_kelly_win_rate, order_price, kelly_boost, bankroll=live_bankroll)
                 if size <= 0:
                     logger.warning(
                         f"✗ safe_place_order | Kelly f*<=0 for {asset} @ {order_price:.3f} "
-                        f"(win={_win_rate:.1f}%) — negative EV, skipping"
+                        f"(win={_win_rate:.1f}% fv={_fair_value:.3f}) — negative EV, skipping"
                     )
                     return None
                 
@@ -1020,8 +1025,8 @@ class OrderManager:
                 
                 logger.info(
                     f"💰 safe_place_order | {asset} | {token} | Kelly size ${size:.2f} "
-                    f"(win_rate={_win_rate:.1f}% price={order_price:.4f} "
-                    f"bankroll=${live_bankroll:.0f} frac={Config.KELLY_FRACTION})"
+                    f"(dir_win={_win_rate:.1f}% fv={_fair_value:.3f} kelly_win={_kelly_win_rate:.1f}% "
+                    f"price={order_price:.4f} bankroll=${live_bankroll:.0f} frac={Config.KELLY_FRACTION})"
                 )
                 
                 asyncio.create_task(_tg_alert_async(
@@ -1803,7 +1808,7 @@ class OrderManager:
             await asyncio.to_thread(self.tracker.record_signal, asset, order_price, confidence, trigger_minute)
         except Exception:
             pass
-        return order_price
+        return {'price': order_price, 'fair_value': historical_avg}
 
     async def store_order_permanent(
         self,
