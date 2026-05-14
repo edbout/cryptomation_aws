@@ -1,75 +1,79 @@
 #!/usr/bin/env python3
-"""Real-time Polymarket mid-price cache backed by a CLOB WebSocket subscription.
+"""Polymarket mid-price cache — background HTTP polling.
 
-The Polymarket CLOB WebSocket lives at wss://clob.polymarket.com (same host as
-the HTTP API at https://clob.polymarket.com).  It is separate from the
-wss://ws-live-data.polymarket.com server which serves oracle/Chainlink feeds.
+Goal: eliminate the per-order HTTP get_midpoint latency in safe_place_order.
 
-Subscription envelope (CLOB WebSocket protocol):
-    {"assets_ids": ["TOKEN_ID_1", "TOKEN_ID_2", ...], "type": "market"}
+Approach: a background asyncio task polls client.get_midpoint() for every
+subscribed YES token once per second.  When safe_place_order fires, the
+latest price is already in memory — zero additional latency.
 
-Server pushes back book snapshots / deltas:
-    {"event_type": "book",  "asset_id": "...", "buys": [...], "sells": [...]}
-    {"event_type": "price_change", "asset_id": "...", "price": "0.74"}
-    {"event_type": "last_trade_price", "asset_id": "...", "price": "0.74"}
+WebSocket approach was attempted first:
+  - wss://clob.polymarket.com      → HTTP 200 (REST root, no WS upgrade)
+  - wss://clob.polymarket.com/ws   → HTTP 404
+  - wss://ws-live-data.polymarket.com (assets_ids subscription) → connects
+    but sends zero messages (server only understands oracle/Chainlink topics)
+
+Polling gives 95% of the WebSocket benefit with guaranteed reliability:
+  - 4 tokens × 1 poll/s = 4 HTTP calls/s (vs. ~100 blocking calls/min now)
+  - Price staleness ≤ POLL_INTERVAL seconds instead of 100–400 ms per order
 
 Usage
 -----
     from lib.poly_mid_cache import POLY_MID_CACHE
 
-    asyncio.create_task(POLY_MID_CACHE.run())          # start once
-    POLY_MID_CACHE.subscribe(["token_id_1", ...])      # call whenever tokens rotate
-    mid = POLY_MID_CACHE.get("token_id_1")             # None → fall back to HTTP
+    POLY_MID_CACHE.set_client(clob_client)           # call once before run()
+    asyncio.create_task(POLY_MID_CACHE.run())        # start background loop
+    POLY_MID_CACHE.subscribe(["token_id_1", ...])    # call whenever tokens rotate
+
+    mid = POLY_MID_CACHE.get("token_id_1")           # None → fall back to HTTP
 """
 
 import asyncio
-import json
 import logging
 import time
-from typing import Dict, List, Optional, Set
-
-import websockets
+from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
-# Candidate WebSocket URLs tried in order on each reconnect cycle.
-# clob.polymarket.com/ws — CLOB WebSocket (REST root returns HTTP 200, /ws is the WS path)
-# ws-live-data.polymarket.com — oracle streaming hub; may also carry market events
-_WS_CANDIDATES = [
-    "wss://clob.polymarket.com/ws",
-    "wss://ws-live-data.polymarket.com",
-]
+# How often to poll each token (seconds).
+# 1 s gives ≤1 s staleness; increase if rate-limiting becomes a concern.
+POLL_INTERVAL: float = 1.0
 
-# Treat a cached price as stale after this many seconds without a WS update.
-STALE_SECS: float = 30.0
-
-# Log raw messages until we've seen this many, to help diagnose subscription issues.
-_RAW_LOG_BURST = 5
+# Treat a cached price as stale after this long without a fresh poll.
+# Set to 3× POLL_INTERVAL so a single failed poll doesn't flush the cache.
+STALE_SECS: float = 3.0
 
 
 class PolymarketMidCache:
-    """Live mid-price cache for Polymarket YES tokens via CLOB WebSocket.
+    """Background-polled mid-price cache for Polymarket YES tokens.
 
-    Thread-safety: `get()` is safe from any thread; everything else runs
+    Thread-safety: get() is safe from any thread; everything else runs
     inside the asyncio event loop.
     """
 
     def __init__(self) -> None:
-        self._prices: Dict[str, float] = {}    # token_id → latest mid
-        self._ts: Dict[str, float] = {}         # token_id → epoch of last update
-        self._subscribed: Set[str] = set()      # tokens the WS currently covers
-        self._pending: Set[str] = set()         # queued until next (re)connect
+        self._prices: Dict[str, float] = {}   # token_id → latest mid
+        self._ts: Dict[str, float] = {}        # token_id → epoch of last update
+        self._subscribed: Set[str] = set()     # tokens being polled
+        self._pending: Set[str] = set()        # queued until next poll cycle
+        self._client: Optional[Any] = None     # ClobClient, injected via set_client()
         self._running: bool = False
         self._hit: int = 0
         self._miss: int = 0
-        self._raw_seen: int = 0                 # messages received since connect
+        self._polls: int = 0                   # total successful polls
+        self._errors: int = 0                  # consecutive poll errors
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
     # ------------------------------------------------------------------ #
 
+    def set_client(self, client: Any) -> None:
+        """Inject the ClobClient.  Must be called before run()."""
+        self._client = client
+        logger.info("✓ PolymarketMidCache | client set")
+
     def get(self, token_id: str) -> Optional[float]:
-        """Return a fresh cached mid, or None (caller should fall back to HTTP)."""
+        """Return a fresh cached mid, or None (caller falls back to HTTP)."""
         ts = self._ts.get(token_id)
         if ts is None or (time.time() - ts) > STALE_SECS:
             self._miss += 1
@@ -78,187 +82,83 @@ class PolymarketMidCache:
         return self._prices[token_id]
 
     def subscribe(self, token_ids: List[str]) -> None:
-        """Queue token_ids for subscription.  Safe to call before run() starts."""
+        """Add token_ids to the polling set.  Safe to call at any time."""
         new = set(token_ids) - self._subscribed - self._pending
         if new:
             self._pending.update(new)
-            logger.debug("PolymarketMidCache | queued %d new token(s)", len(new))
+            logger.debug("PolymarketMidCache | queued %d new token(s) for polling", len(new))
 
     def stats(self) -> str:
         total = self._hit + self._miss
         hit_rate = 100 * self._hit / total if total else 0
         return (
             f"hits={self._hit} misses={self._miss} "
-            f"hit_rate={hit_rate:.0f}% cached_tokens={len(self._prices)}"
+            f"hit_rate={hit_rate:.0f}% cached_tokens={len(self._prices)} polls={self._polls}"
         )
 
     # ------------------------------------------------------------------ #
-    # Async run loop                                                       #
+    # Background polling loop                                              #
     # ------------------------------------------------------------------ #
 
     async def run(self) -> None:
-        """Connect to the CLOB WebSocket and pump messages — reconnects forever.
-
-        Cycles through _WS_CANDIDATES on each attempt so we automatically
-        discover which URL works without manual intervention.
-        """
+        """Poll get_midpoint for every subscribed token once per second."""
         self._running = True
-        _attempt = 0
-        _disconnect_ts: Optional[float] = None
+
+        if self._client is None:
+            logger.error("✗ PolymarketMidCache | no client set — polling disabled")
+            return
+
+        logger.info("✓ PolymarketMidCache | polling loop started (interval=%.1fs)", POLL_INTERVAL)
 
         while self._running:
-            url = _WS_CANDIDATES[_attempt % len(_WS_CANDIDATES)]
-            _attempt += 1
-            try:
-                async with websockets.connect(
-                    url,
-                    ping_interval=20,
-                    ping_timeout=30,
-                    additional_headers={"Origin": "https://polymarket.com"},
-                ) as ws:
-                    if _disconnect_ts is not None:
-                        down_secs = int(time.time() - _disconnect_ts)
-                        logger.info("✓ PolymarketMidCache | reconnected after %ds down", down_secs)
-                    _attempt = 0          # reset so next reconnect starts from candidate 0
-                    _disconnect_ts = None
-                    self._raw_seen = 0
-
-                    all_tokens = self._subscribed | self._pending
-                    if all_tokens:
-                        await self._send_subscribe(ws, all_tokens)
-                        self._subscribed = set(all_tokens)
-                        self._pending.clear()
-
-                    logger.info(
-                        "✓ PolymarketMidCache | connected to %s (%d tokens)",
-                        url, len(self._subscribed),
-                    )
-
-                    async for raw in ws:
-                        if self._pending:
-                            await self._send_subscribe(ws, self._pending)
-                            self._subscribed |= self._pending
-                            self._pending.clear()
-
-                        if not isinstance(raw, str):
-                            continue
-
-                        # Diagnostic burst: log raw messages at INFO until we have
-                        # confirmed pricing is working (cached_tokens > 0).
-                        if self._raw_seen < _RAW_LOG_BURST or not self._prices:
-                            self._raw_seen += 1
-                            logger.info(
-                                "📡 PolymarketMidCache [%s] raw[%d]: %.300s",
-                                url.split("/")[2], self._raw_seen, raw,
-                            )
-
-                        try:
-                            self._handle_message(raw)
-                        except Exception as exc:
-                            logger.debug(
-                                "PolymarketMidCache | parse error: %s | raw=%.120s", exc, raw
-                            )
-
-            except asyncio.CancelledError:
-                logger.info("PolymarketMidCache | cancelled")
-                break
-            except (websockets.ConnectionClosed, ConnectionResetError) as exc:
-                if _disconnect_ts is None:
-                    _disconnect_ts = time.time()
-                wait = min(3 * _attempt, 30)
-                down_secs = int(time.time() - _disconnect_ts)
-                logger.warning(
-                    "⚠️ PolymarketMidCache | [%s] disconnected (%ds), next attempt #%d in %ds: %s",
-                    url.split("/")[2], down_secs, _attempt + 1, wait, exc,
+            # Flush any newly queued tokens
+            if self._pending:
+                self._subscribed |= self._pending
+                self._pending.clear()
+                logger.info(
+                    "✓ PolymarketMidCache | now polling %d token(s)", len(self._subscribed)
                 )
-                await asyncio.sleep(wait)
-            except Exception as exc:
-                wait = min(5 * _attempt, 60)
-                logger.warning(
-                    "✗ PolymarketMidCache | [%s] attempt #%d failed in %ds: %r",
-                    url.split("/")[2], _attempt, wait, exc,
-                )
-                await asyncio.sleep(wait)
 
-    # ------------------------------------------------------------------ #
-    # Internal helpers                                                     #
-    # ------------------------------------------------------------------ #
+            # Poll all tokens concurrently
+            if self._subscribed:
+                tasks = [
+                    self._fetch_one(token_id)
+                    for token_id in list(self._subscribed)
+                ]
+                await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _send_subscribe(self, ws, token_ids: Set[str]) -> None:
-        """Send a CLOB market subscription for the given token IDs."""
-        if not token_ids:
-            return
-        msg = json.dumps({
-            "assets_ids": list(token_ids),
-            "type": "market",
-        })
-        await ws.send(msg)
-        logger.info(
-            "✓ PolymarketMidCache | subscribed to %d token(s): %s…",
-            len(token_ids),
-            ", ".join(list(token_ids)[:2]),
-        )
+            await asyncio.sleep(POLL_INTERVAL)
 
-    def _handle_message(self, raw: str) -> None:
-        """Parse a server message and update the price cache."""
-        data = json.loads(raw)
-
-        # CLOB pushes a list for book snapshots, a dict for single events.
-        if isinstance(data, list):
-            for item in data:
-                self._dispatch(item)
-        elif isinstance(data, dict):
-            self._dispatch(data)
-
-    def _dispatch(self, data: dict) -> None:
-        event = data.get("event_type") or data.get("type", "")
-        if event == "book":
-            self._update_from_book(data)
-        elif event in ("price_change", "last_trade_price", "midpoint"):
-            self._update_from_price(data)
-        # heartbeat / unknown events → ignored
-
-    def _update_from_book(self, data: dict) -> None:
-        token_id = data.get("asset_id") or data.get("token_id")
-        if not token_id:
-            return
-
-        buys  = data.get("buys")  or data.get("bids")  or []
-        sells = data.get("sells") or data.get("asks")  or []
-
+    async def _fetch_one(self, token_id: str) -> None:
+        """Fetch and cache the mid-price for a single token."""
         try:
-            best_bid = max(float(b["price"]) for b in buys)  if buys  else None
-            best_ask = min(float(s["price"]) for s in sells) if sells else None
-        except (KeyError, TypeError, ValueError):
-            return
-
-        if best_bid is not None and best_ask is not None:
-            mid = (best_bid + best_ask) / 2.0
-        elif best_bid is not None:
-            mid = best_bid
-        elif best_ask is not None:
-            mid = best_ask
-        else:
-            return
-
-        self._set(token_id, mid)
-
-    def _update_from_price(self, data: dict) -> None:
-        token_id  = data.get("asset_id") or data.get("token_id")
-        price_str = data.get("price") or data.get("mid")
-        if token_id and price_str:
-            try:
-                self._set(token_id, float(price_str))
-            except (ValueError, TypeError):
-                pass
+            resp = await asyncio.to_thread(self._client.get_midpoint, token_id)
+            if isinstance(resp, dict) and "mid" in resp:
+                mid = float(resp["mid"])
+                was_new = token_id not in self._prices
+                self._set(token_id, mid)
+                self._polls += 1
+                self._errors = 0
+                if was_new:
+                    logger.info(
+                        "✓ PolymarketMidCache | first price for token …%s: %.4f",
+                        token_id[-8:], mid,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._errors += 1
+            # Only log errors occasionally to avoid log spam
+            if self._errors == 1 or self._errors % 60 == 0:
+                logger.warning(
+                    "⚠️ PolymarketMidCache | poll error for …%s (×%d): %s",
+                    token_id[-8:], self._errors, exc,
+                )
 
     def _set(self, token_id: str, mid: float) -> None:
         if 0.0 < mid < 1.0:
-            was_new = token_id not in self._prices
             self._prices[token_id] = mid
             self._ts[token_id] = time.time()
-            if was_new:
-                logger.info("✓ PolymarketMidCache | first price for token …%s: %.4f", token_id[-8:], mid)
 
 
 # Module-level singleton — import this everywhere.

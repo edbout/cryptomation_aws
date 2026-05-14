@@ -485,10 +485,11 @@ class BybitManager:
             logger.info(
                 f"✓ _refresh_token_cache | {len(new_cache)} assets cached: {list(new_cache.keys())}"
             )
-            # Keep the mid-price cache subscribed to the latest YES token IDs.
-            # Tokens rotate every 5 minutes as Polymarket opens new candle markets.
-            yes_ids = [yes for yes, _ in new_cache.values()]
-            POLY_MID_CACHE.subscribe(yes_ids)
+            # Keep the mid-price cache subscribed to the latest YES and NO token IDs.
+            # safe_place_order trades either side, so both tokens need a cached mid.
+            # 4 assets × 2 tokens = 8 polls/second.
+            all_ids = [tid for yes, no in new_cache.values() for tid in (yes, no)]
+            POLY_MID_CACHE.subscribe(all_ids)
         except Exception as e:
             logger.warning(f"⚠️ _refresh_token_cache | Failed: {e}")
 
@@ -1658,6 +1659,7 @@ async def main():
     # START feeds AFTER initialization
     coinbase_feed.start()
     chainlink_feed.start()
+    POLY_MID_CACHE.set_client(client)
     asyncio.create_task(POLY_MID_CACHE.run())
     logger.info("✓ main | PolymarketMidCache started")
 
