@@ -148,12 +148,20 @@ class PriceTracker:
         cb_dir: str = '',
         cl_dir: str = '',
         agree: str = '',
+        binance_dir: str = '',
     ) -> None:
         """Record pre-edge aligned signal to prices:signals_raw:{asset}.
 
         Written for every signal that passes OBI + fairvalue + alignment,
         before the edge threshold. Used for paper-trade backtesting and
         signal quality analysis independent of edge gating.
+
+        Record format (11 fields, ':'-separated):
+            {minute}:{seconds}:{price}:{pct}:{token}:
+            {bybit_dir}:{binance_dir}:{cb_dir}:{cl_dir}:{agree}:{outcome}
+
+        Legacy 10-field records (pre-Binance) omit `binance_dir` — readers
+        in seed_stats_from_raw and backtest_kelly_boost handle both lengths.
         """
         if pm_price <= 0 or pm_price >= 1.0:
             return
@@ -163,7 +171,7 @@ class PriceTracker:
         key = f"prices:signals_raw:{asset}"
         member = (
             f"{trigger_minute}:{candle_seconds}:{pm_price:.6f}:{bybit_pct:.4f}:{token}:"
-            f"{bybit_dir}:{cb_dir}:{cl_dir}:{agree}:na"
+            f"{bybit_dir}:{binance_dir}:{cb_dir}:{cl_dir}:{agree}:na"
         )
 
         pipe = self.rdb.pipeline()
@@ -612,9 +620,13 @@ class PriceTracker:
         for mem_bytes, ts in members:
             mem_str = mem_bytes.decode() if isinstance(mem_bytes, bytes) else mem_bytes
             parts = mem_str.split(':')
+            # Backward compatible: legacy 10-field records (pre-Binance trigger)
+            # and current 11-field records (with binance_dir inserted at index 6).
+            # Legacy layout:  [min, sec, price, pct, token, bybit_dir, cb_dir, cl_dir, agree, outcome]
+            # Current layout: [min, sec, price, pct, token, bybit_dir, binance_dir, cb_dir, cl_dir, agree, outcome]
             if len(parts) < 10:
                 continue
-            outcome = parts[9]
+            outcome = parts[-1]
             if outcome == 'na':
                 continue
             try:

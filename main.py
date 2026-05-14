@@ -67,6 +67,7 @@ from redeem import run_redeem_non_interactive
 from lib.helpers import  get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts, normalize_asset
 from lib.telegram_alert import send_alert
 from lib.polymarket_mid_cache import POLY_MID_CACHE
+from lib.binance_feed import BinanceFeed
 
 @dataclass
 class TickData:
@@ -295,7 +296,7 @@ class BybitCandle5m:
         return updated
 
     def _update_order_outcomes(self, symbol: str, bar_pct: float, bar_start_ts: int):
-        """Write Bybit/Coinbase/Chainlink consensus direction to orders placed during the closed bar."""
+        """Write Bybit/Binance/Coinbase/Chainlink consensus direction to orders placed during the closed bar."""
         asset = normalize_asset(symbol)
         pending_key = f"orders:pending_outcome:{asset}"
         order_ids = self.redis.zrangebyscore(pending_key, bar_start_ts, bar_start_ts)
@@ -306,8 +307,10 @@ class BybitCandle5m:
         directions = [bybit_dir]
         coinbase_dir = ''
         chainlink_dir = ''
+        binance_dir = ''
         cb_pct = None
         cl_pct = None
+        bn_pct = None
 
         try:
             global BYBIT_MANAGER
@@ -320,6 +323,16 @@ class BybitCandle5m:
                     cb_pct = (cb_cur - cb_base) / cb_base * 100
                     coinbase_dir = 'UP' if cb_pct > 0 else 'DOWN'
                     directions.append(coinbase_dir)
+
+                # Binance Spot: BTCUSD → BTCUSDT
+                if Config.BINANCE_ENABLED and BYBIT_MANAGER.binance_feed is not None:
+                    bn_sym = symbol + 'T'
+                    bn_cur  = BYBIT_MANAGER.binance_feed.last_prices.get(bn_sym, 0.0)
+                    bn_base = BYBIT_MANAGER.binance_feed.binance_5m_bases.get(bn_sym, 0.0)
+                    if bn_cur > 0 and bn_base > 0:
+                        bn_pct = (bn_cur - bn_base) / bn_base * 100
+                        binance_dir = 'UP' if bn_pct > 0 else 'DOWN'
+                        directions.append(binance_dir)
 
                 # Chainlink: BTCUSD → btc/usd
                 cl_sym = symbol.replace('USD', '').lower() + '/usd'
@@ -340,6 +353,8 @@ class BybitCandle5m:
             self.redis.hset(f"order:{order_id}", mapping={
                 'bar_direction':  bybit_dir,
                 'bar_pct':        round(bar_pct, 3),
+                'bar_binance':    binance_dir,
+                'bar_bin_pct':    '' if bn_pct is None else round(bn_pct, 3),
                 'bar_coinbase':   coinbase_dir,
                 'bar_cb_pct':     '' if cb_pct is None else round(cb_pct, 3),
                 'bar_chainlink':  chainlink_dir,
@@ -349,8 +364,8 @@ class BybitCandle5m:
                 'bar_updated_at': now_ts,
             })
             logger.info(
-                "📊 update_order_outcomes | %s | %s → %s (bybit) | CB:%s CL:%s | consensus:%s %s",
-                asset, order_id[:8], bybit_dir, coinbase_dir or '?', chainlink_dir or '?', consensus, agree
+                "📊 update_order_outcomes | %s | %s → %s (bybit) | BN:%s CB:%s CL:%s | consensus:%s %s",
+                asset, order_id[:8], bybit_dir, binance_dir or '?', coinbase_dir or '?', chainlink_dir or '?', consensus, agree
             )
 
         self.redis.zrem(pending_key, *order_ids)
@@ -436,6 +451,7 @@ class BybitManager:
         self.data: Dict[str, TickData] = {}  # Per-symbol ticks
         self.chainlink_feed = chainlink_feed
         self.coinbase_feed = coinbase_feed
+        self.binance_feed = binance_feed
         self.bybit_candles: Dict[str, BybitCandle5m] = {
             sym: BybitCandle5m() for sym in Config.BYBIT_SYMBOLS
         }
@@ -916,27 +932,56 @@ class BybitManager:
             else:
                 coinbase_pct = 0.0
 
-            # Alignment: Bybit + Coinbase only (Chainlink excluded — oracle fires only on
-            # 0.5%+ moves, so it's stale on nearly every signal at our 0.03% threshold).
-            # Chainlink direction is still recorded in the consensus dict for outcome tracking.
-            strong_enough = abs(bybit_5m_pct) > 0.03 and abs(coinbase_pct) > 0.03
-            same_direction = (bybit_5m_pct > 0) == (coinbase_pct > 0)
-            max_div = max(0.12, abs(bybit_5m_pct) * 0.6)  # relative ±60%, min 0.12%
-            not_too_far = abs(bybit_5m_pct - coinbase_pct) <= max_div
+            # Binance Spot pct (5m bar). BTCUSD → BTCUSDT mapping.
+            binance_sym = sym + "T"  # BTCUSD → BTCUSDT, ETHUSD → ETHUSDT, etc.
+            binance_pct = 0.0
+            if Config.BINANCE_ENABLED and self.binance_feed is not None:
+                bn_current = self.binance_feed.last_prices.get(binance_sym, 0.0)
+                bn_base_5m = self.binance_feed.binance_5m_bases.get(binance_sym, 0.0)
+                if bn_current > 0 and bn_base_5m > 0:
+                    binance_pct = 100.0 * (bn_current - bn_base_5m) / bn_base_5m
 
-            aligned = strong_enough and same_direction and not_too_far
+            # ----------------------------------------------------------------
+            # Alignment: N-of-M direction voting across
+            #   {Bybit Futures, Binance Spot, Coinbase Futures}.
+            # A source "votes" only when |pct| > ALIGNMENT_MIN_PCT.
+            # Aligned when >= ALIGNMENT_MIN_SOURCES of the active votes agree on
+            # direction. Chainlink stays informational only.
+            # ----------------------------------------------------------------
+            min_pct = Config.ALIGNMENT_MIN_PCT
+            votes = []  # list of (label, pct)
+            if abs(bybit_5m_pct) > min_pct:
+                votes.append(("bybit", bybit_5m_pct))
+            if Config.BINANCE_ENABLED and abs(binance_pct) > min_pct:
+                votes.append(("binance", binance_pct))
+            if abs(coinbase_pct) > min_pct:
+                votes.append(("coinbase", coinbase_pct))
+
+            ups = sum(1 for _, p in votes if p > 0)
+            downs = sum(1 for _, p in votes if p < 0)
+            direction_votes = max(ups, downs)
+            agree_dir = "UP" if ups >= downs else "DOWN"
+            aligned = direction_votes >= Config.ALIGNMENT_MIN_SOURCES
+
+            # Sources considered (for the agree string denominator). Always 3 when
+            # Binance is enabled, 2 otherwise — gives a stable "X/3" or "X/2" string.
+            n_sources = 3 if Config.BINANCE_ENABLED else 2
+
             if not aligned:
                 logger.info(
                         f"🚫 get_signal | {sym:>8} | Bybit: {bybit_5m_pct:+.2f}% | "
-                        f"Coinbase: {coinbase_pct:+.2f}% | Chainlink: {chainlink_pct:+.2f}% (age={chainlink_age:.0f}s) | "
-                        f"strong={strong_enough} dir={same_direction} div_ok={not_too_far}"
+                        f"Binance: {binance_pct:+.2f}% | Coinbase: {coinbase_pct:+.2f}% | "
+                        f"Chainlink: {chainlink_pct:+.2f}% (age={chainlink_age:.0f}s, info) | "
+                        f"votes={direction_votes}/{n_sources} need {Config.ALIGNMENT_MIN_SOURCES}"
                     )
                 rdb.hincrby(f"stats:trade:{normalize_asset(sym)}", "alignment_fail", 1)
                 return None
             else:
                 logger.info(
                         f"📊 get_signal | {sym:>8} | Bybit: {bybit_5m_pct:+.2f}% | "
-                        f"Coinbase: {coinbase_pct:+.2f}% | Chainlink: {chainlink_pct:+.2f}% (age={chainlink_age:.0f}s, info) | Aligned"
+                        f"Binance: {binance_pct:+.2f}% | Coinbase: {coinbase_pct:+.2f}% | "
+                        f"Chainlink: {chainlink_pct:+.2f}% (age={chainlink_age:.0f}s, info) | "
+                        f"Aligned {direction_votes}/{n_sources} → {agree_dir}"
                     )
                 rdb.hincrby(f"stats:trade:{normalize_asset(sym)}", "alignment_pass", 1)
 
@@ -978,14 +1023,16 @@ class BybitManager:
                     return None
 
                 bybit_dir = "UP" if bybit_5m_pct > 0 else "DOWN"
-                cb_dir = "UP" if coinbase_pct > 0 else "DOWN"
+                cb_dir = "UP" if coinbase_pct > 0 else ("DOWN" if coinbase_pct < 0 else "")
                 cl_dir = "UP" if chainlink_pct > 0 else ("DOWN" if chainlink_pct < 0 else "")
+                binance_dir = "UP" if binance_pct > 0 else ("DOWN" if binance_pct < 0 else "")
 
                 consensus = {
                     "bybit_dir": bybit_dir,
+                    "binance_dir": binance_dir,
                     "cb_dir": cb_dir,
                     "cl_dir": cl_dir,
-                    "agree": "2/2",
+                    "agree": f"{direction_votes}/{n_sources}",
                 }
 
                 return normalize_asset(sym), side, bybit_5m_pct, open_price, consensus
@@ -1308,6 +1355,7 @@ class ChainlinkFeed:
                 await asyncio.sleep(wait)
 
 chainlink_feed = ChainlinkFeed()
+binance_feed = BinanceFeed()
 
 async def execute_trading_validation(symbol: str = None) -> Optional[Dict]:
     """Trading validation - single symbol for poll() efficiency."""
@@ -1631,31 +1679,32 @@ async def getsignal(sym: str) -> Optional[Tuple[str, str, float, float, dict]]:
     return BYBIT_MANAGER.get_signal(sym)
 
 async def main():
-    global shutting_down, BYBIT_MANAGER, coinbase_feed, chainlink_feed
-    
+    global shutting_down, BYBIT_MANAGER, coinbase_feed, chainlink_feed, binance_feed
+
     # Early exits with cleanup
     if not geo_checker.test_geo():
         logger.warning("🌍 main | Geoblocked - monitoring only")
-    
+
     if not test_redis():
         logger.error("✗ main | Redis required")
-        return 
-        
+        return
+
     # Initialize ALL feeds FIRST (before starting)
     coinbase_feed = CoinbaseFeed()
     chainlink_feed = ChainlinkFeed()
-    
+    binance_feed = BinanceFeed()
+
     log_config()
-    checker.log_status()     
-    
+    checker.log_status()
+
     logger.info("🚀 main | Starting")
     await send_alert(f"<b>Restarted Bot</b>\n🚀 main | Starting")
-   
+
     # Clear orders + start background threads
     await order_mgr.clear_open_orders()
     await asyncio.to_thread(price_tracker.run, limit=5)
     await order_mgr.fast_approve("COLLATERAL")
-    
+
     # START feeds AFTER initialization
     coinbase_feed.start()
     chainlink_feed.start()
@@ -1666,6 +1715,11 @@ async def main():
     BYBIT_MANAGER = BybitManager()
     loop = asyncio.get_running_loop()
     BYBIT_MANAGER.start_websocket(loop)
+
+    # Wire BinanceFeed's trigger entry point to the same event loop the Bybit
+    # callbacks use. Late binding avoids a circular import in lib/binance_feed.
+    binance_feed.attach_validator(execute_trading_validation, loop)
+    binance_feed.start()
          
     sched_task = asyncio.create_task(timer_loop())
 
@@ -1701,6 +1755,9 @@ async def main():
         if chainlink_feed:
             chainlink_feed.stop()
             logger.info("✓ main | Chainlink feed stopped")
+        if binance_feed:
+            binance_feed.stop()
+            logger.info("✓ main | Binance feed stopped")
 
         # Final resource cleanup
         if 'rdb' in globals():

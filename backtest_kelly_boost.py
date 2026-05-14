@@ -9,9 +9,16 @@ DATA SOURCES:
   prices:signals:{ASSET}         — gated signals (post edge/OBI/volume/alignment).
                                     Members: {seconds}:{price}:{pct}:{direction}:{outcome}
   prices:signals_raw:{ASSET}     — pre-edge aligned signals.
-                                    Members: {trigger_minute}:{seconds}:{price}:{pct}:
+                                    Members (current, 11 fields):
+                                             {trigger_minute}:{seconds}:{price}:{pct}:
+                                             {token}:{bybit_dir}:{binance_dir}:
+                                             {cb_dir}:{cl_dir}:{agree}:{outcome}
+                                    Members (legacy, 10 fields, pre-Binance trigger):
+                                             {trigger_minute}:{seconds}:{price}:{pct}:
                                              {token}:{bybit_dir}:{cb_dir}:{cl_dir}:
                                              {agree}:{outcome}
+                                    Both formats are read; outcome is always the last
+                                    field, bybit_dir is always index 5.
 
   Outcome must be :up or :down (not :na) to be included.
   Asset keys are case-sensitive in Redis and stored UPPERCASE (e.g. BTCUSDT).
@@ -94,8 +101,12 @@ def load_signals(asset: str) -> List[Dict]:
 def load_raw_signals(asset: str) -> List[Dict]:
     """Load resolved raw-signal records from prices:signals_raw:{asset}.
 
-    Member format: {trigger_minute}:{seconds}:{price}:{pct}:{token}:
-                   {bybit_dir}:{cb_dir}:{cl_dir}:{agree}:{outcome}
+    Two formats are supported (backward-compatible read):
+      Legacy (10 fields, pre-Binance trigger):
+        {minute}:{seconds}:{price}:{pct}:{token}:{bybit_dir}:{cb_dir}:{cl_dir}:{agree}:{outcome}
+      Current (11 fields):
+        {minute}:{seconds}:{price}:{pct}:{token}:{bybit_dir}:{binance_dir}:{cb_dir}:{cl_dir}:{agree}:{outcome}
+
     bybit_dir is 'UP'/'DOWN' (uppercase), outcome is 'up'/'down' (lowercase).
     """
     key = f"prices:signals_raw:{asset}"
@@ -105,7 +116,7 @@ def load_raw_signals(asset: str) -> List[Dict]:
         parts = entry.split(":")
         if len(parts) < 10:
             continue
-        outcome = parts[9].lower()
+        outcome = parts[-1].lower()
         if outcome not in ("up", "down"):
             continue
         try:
@@ -113,7 +124,7 @@ def load_raw_signals(asset: str) -> List[Dict]:
                 "seconds":   int(parts[1]),
                 "price":     float(parts[2]),
                 "pct":       float(parts[3]),
-                "direction": parts[5].lower(),  # bybit_dir
+                "direction": parts[5].lower(),  # bybit_dir (same index in both formats)
                 "outcome":   outcome,
                 "source":    "raw",
             })
