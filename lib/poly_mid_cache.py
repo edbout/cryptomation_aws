@@ -4,17 +4,21 @@
 Goal: eliminate the per-order HTTP get_midpoint latency in safe_place_order.
 
 Approach: a background asyncio task polls client.get_midpoint() for every
-subscribed YES token once per second.  When safe_place_order fires, the
-latest price is already in memory — zero additional latency.
+subscribed token once per second.  When safe_place_order fires, the latest
+price is already in memory — zero additional latency.
 
-WebSocket approach was attempted first:
+Both YES and NO tokens are subscribed (4 assets × 2 sides = 8 tokens) because
+safe_place_order trades either side depending on signal direction.
+
+WebSocket approach was attempted first and exhausted:
   - wss://clob.polymarket.com      → HTTP 200 (REST root, no WS upgrade)
   - wss://clob.polymarket.com/ws   → HTTP 404
   - wss://ws-live-data.polymarket.com (assets_ids subscription) → connects
-    but sends zero messages (server only understands oracle/Chainlink topics)
+    but sends zero messages for 35+ min (server only serves oracle/Chainlink
+    topics; CLOB order book data is not available via WebSocket)
 
-Polling gives 95% of the WebSocket benefit with guaranteed reliability:
-  - 4 tokens × 1 poll/s = 4 HTTP calls/s (vs. ~100 blocking calls/min now)
+HTTP polling gives 95% of the WebSocket benefit with guaranteed reliability:
+  - 8 tokens × 1 poll/s = 8 HTTP calls/s (vs. ~100 blocking calls/min before)
   - Price staleness ≤ POLL_INTERVAL seconds instead of 100–400 ms per order
 
 Usage
@@ -45,7 +49,11 @@ STALE_SECS: float = 3.0
 
 
 class PolymarketMidCache:
-    """Background-polled mid-price cache for Polymarket YES tokens.
+    """Background-polled mid-price cache for Polymarket YES and NO tokens.
+
+    Polls all subscribed tokens concurrently every POLL_INTERVAL seconds using
+    asyncio.to_thread so the blocking HTTP call doesn't stall the event loop.
+    Tokens are added via subscribe() and picked up on the next poll cycle.
 
     Thread-safety: get() is safe from any thread; everything else runs
     inside the asyncio event loop.
@@ -147,8 +155,19 @@ class PolymarketMidCache:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # 404 = token expired (market resolved or epoch rolled over).
+            # Unsubscribe immediately so we stop polling a dead token.
+            if getattr(exc, "status_code", None) == 404 or "No orderbook" in str(exc):
+                self._subscribed.discard(token_id)
+                self._prices.pop(token_id, None)
+                self._ts.pop(token_id, None)
+                logger.debug(
+                    "PolymarketMidCache | token …%s expired (404) — unsubscribed",
+                    token_id[-8:],
+                )
+                return
             self._errors += 1
-            # Only log errors occasionally to avoid log spam
+            # Only log other errors occasionally to avoid log spam
             if self._errors == 1 or self._errors % 60 == 0:
                 logger.warning(
                     "⚠️ PolymarketMidCache | poll error for …%s (×%d): %s",
