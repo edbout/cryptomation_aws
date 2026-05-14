@@ -60,13 +60,13 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("py_clob_client_v2.http_helpers.helpers").setLevel(logging.CRITICAL)
 
-# Core imports (now safe to log)
+# Core imports
 from config import Config, RedisCache
 from components import Components
 from redeem import run_redeem_non_interactive
 from lib.helpers import  get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts, normalize_asset
 from lib.telegram_alert import send_alert
-from lib.poly_mid_cache import POLY_MID_CACHE
+from lib.polymarket_mid_cache import POLY_MID_CACHE
 
 @dataclass
 class TickData:

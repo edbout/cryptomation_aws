@@ -15,7 +15,7 @@ from py_clob_client_v2.exceptions import PolyApiException
 
 from config import Config, RedisCache
 from price_tracker import PriceTracker
-from lib.poly_mid_cache import POLY_MID_CACHE
+from lib.polymarket_mid_cache import POLY_MID_CACHE
 from lib.polymarket_positions import PolymarketPositionManager
 from lib.helpers import safe_float, get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts
 from lib.telegram_alert import send_alert as _tg_alert_async, send_alert_sync as _tg_alert
@@ -955,7 +955,7 @@ class OrderManager:
                 # validate_adjust_price would reject it anyway (order_price > PRICE_MAX).
                 # Avoids wasting order-construction cycles on resolved or near-resolved epochs.
                 if price >= Config.NEAR_RESOLVED_THRESHOLD:
-                    logger.debug(
+                    logger.info(
                         "✗ safe_place_order | %s near-resolved early-exit (mid=%.4f ≥ %.2f) — skip",
                         asset, price, Config.NEAR_RESOLVED_THRESHOLD,
                     )
@@ -1026,14 +1026,8 @@ class OrderManager:
                 logger.info(
                     f"💰 safe_place_order | {asset} | {token} | Kelly size ${size:.2f} "
                     f"(dir_win={_win_rate:.1f}% fv={_fair_value:.3f} kelly_win={_kelly_win_rate:.1f}% "
-                    f"price={order_price:.4f} bankroll=${live_bankroll:.0f} frac={Config.KELLY_FRACTION})"
+                    f"price={order_price:.4f} bankroll=${live_bankroll:.0f})"
                 )
-                
-                asyncio.create_task(_tg_alert_async(
-                    f"{asset} | {token} | size ${size:.2f} "
-                    f"(win_rate={_win_rate:.1f}% price={order_price:.4f} "
-                    f"bankroll=${live_bankroll:.0f} frac={Config.KELLY_FRACTION})"
-                ))
                 
                 # Execute order based on config
                 if Config.DRY_RUN:
@@ -1102,6 +1096,12 @@ class OrderManager:
                         order_price, open_price, trigger_minute
                     )
                     self.redis.hincrby(f"stats:trade:{asset}", "order_placed", 1)
+                        
+                    asyncio.create_task(_tg_alert_async(
+                        f"✅ {asset} | {token} | size ${size:.2f} "
+                        f"(win_rate={_win_rate:.1f}% price={order_price:.4f} conf={confidence:.4f}) "
+                        f"bankroll=${live_bankroll:.0f} | {market_slug})"
+                    ))
                     return response
 
                 else:
