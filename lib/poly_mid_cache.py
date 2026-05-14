@@ -32,8 +32,13 @@ import websockets
 
 logger = logging.getLogger(__name__)
 
-# WebSocket URL — CLOB server (NOT ws-live-data which is oracle-only)
-WS_URL = "wss://clob.polymarket.com"
+# Candidate WebSocket URLs tried in order on each reconnect cycle.
+# clob.polymarket.com/ws — CLOB WebSocket (REST root returns HTTP 200, /ws is the WS path)
+# ws-live-data.polymarket.com — oracle streaming hub; may also carry market events
+_WS_CANDIDATES = [
+    "wss://clob.polymarket.com/ws",
+    "wss://ws-live-data.polymarket.com",
+]
 
 # Treat a cached price as stale after this many seconds without a WS update.
 STALE_SECS: float = 30.0
@@ -92,15 +97,21 @@ class PolymarketMidCache:
     # ------------------------------------------------------------------ #
 
     async def run(self) -> None:
-        """Connect to the CLOB WebSocket and pump messages — reconnects forever."""
+        """Connect to the CLOB WebSocket and pump messages — reconnects forever.
+
+        Cycles through _WS_CANDIDATES on each attempt so we automatically
+        discover which URL works without manual intervention.
+        """
         self._running = True
-        _retry_count = 0
+        _attempt = 0
         _disconnect_ts: Optional[float] = None
 
         while self._running:
+            url = _WS_CANDIDATES[_attempt % len(_WS_CANDIDATES)]
+            _attempt += 1
             try:
                 async with websockets.connect(
-                    WS_URL,
+                    url,
                     ping_interval=20,
                     ping_timeout=30,
                     additional_headers={"Origin": "https://polymarket.com"},
@@ -108,7 +119,7 @@ class PolymarketMidCache:
                     if _disconnect_ts is not None:
                         down_secs = int(time.time() - _disconnect_ts)
                         logger.info("✓ PolymarketMidCache | reconnected after %ds down", down_secs)
-                    _retry_count = 0
+                    _attempt = 0          # reset so next reconnect starts from candidate 0
                     _disconnect_ts = None
                     self._raw_seen = 0
 
@@ -120,7 +131,7 @@ class PolymarketMidCache:
 
                     logger.info(
                         "✓ PolymarketMidCache | connected to %s (%d tokens)",
-                        WS_URL, len(self._subscribed),
+                        url, len(self._subscribed),
                     )
 
                     async for raw in ws:
@@ -132,13 +143,13 @@ class PolymarketMidCache:
                         if not isinstance(raw, str):
                             continue
 
-                        # Diagnostic burst: log the first N raw messages at INFO
-                        # so we can see exactly what the server sends back.
-                        if self._raw_seen < _RAW_LOG_BURST:
+                        # Diagnostic burst: log raw messages at INFO until we have
+                        # confirmed pricing is working (cached_tokens > 0).
+                        if self._raw_seen < _RAW_LOG_BURST or not self._prices:
                             self._raw_seen += 1
                             logger.info(
-                                "📡 PolymarketMidCache | raw[%d]: %.300s",
-                                self._raw_seen, raw,
+                                "📡 PolymarketMidCache [%s] raw[%d]: %.300s",
+                                url.split("/")[2], self._raw_seen, raw,
                             )
 
                         try:
@@ -154,22 +165,18 @@ class PolymarketMidCache:
             except (websockets.ConnectionClosed, ConnectionResetError) as exc:
                 if _disconnect_ts is None:
                     _disconnect_ts = time.time()
-                _retry_count += 1
-                wait = min(3 * (2 ** (_retry_count - 1)), 60)
+                wait = min(3 * _attempt, 30)
                 down_secs = int(time.time() - _disconnect_ts)
                 logger.warning(
-                    "⚠️ PolymarketMidCache | disconnected (%ds), retry #%d in %ds: %s",
-                    down_secs, _retry_count, wait, exc,
+                    "⚠️ PolymarketMidCache | [%s] disconnected (%ds), next attempt #%d in %ds: %s",
+                    url.split("/")[2], down_secs, _attempt + 1, wait, exc,
                 )
                 await asyncio.sleep(wait)
             except Exception as exc:
-                if _disconnect_ts is None:
-                    _disconnect_ts = time.time()
-                _retry_count += 1
-                wait = min(5 * (2 ** (_retry_count - 1)), 60)
-                logger.exception(
-                    "✗ PolymarketMidCache | error (retry #%d in %ds): %r",
-                    _retry_count, wait, exc,
+                wait = min(5 * _attempt, 60)
+                logger.warning(
+                    "✗ PolymarketMidCache | [%s] attempt #%d failed in %ds: %r",
+                    url.split("/")[2], _attempt, wait, exc,
                 )
                 await asyncio.sleep(wait)
 
