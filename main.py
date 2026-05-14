@@ -1486,7 +1486,14 @@ async def balance_check():
         balance = checker.pusd_balance
         can_trade = checker.check_trading_capacity(Config.POSITION_SIZE)
         rdb.set("bot:live_bankroll", str(round(balance, 2)), ex=300)
-        logger.info("💰 balance_check | pUSD: $%.2f | Can trade: %s", balance, can_trade)
+        # Surface PRICE_MAX skip rate for calibration auditing.
+        # A high count means many signals are firing when Polymarket odds are already > PRICE_MAX.
+        # Consider raising PRICE_MAX or NEAR_RESOLVED_THRESHOLD if this grows large relative to trades.
+        price_max_skips = int(rdb.get("bot:skip:price_max") or 0)
+        logger.info(
+            "💰 balance_check | pUSD: $%.2f | Can trade: %s | price_max_skips: %d (PRICE_MAX=%.2f)",
+            balance, can_trade, price_max_skips, Config.PRICE_MAX,
+        )
         if balance < 5.0:
             await send_alert(f"⚠️ <b>Low balance</b>: ${balance:.2f} pUSD\nTrading suspended until topped up")
         return can_trade

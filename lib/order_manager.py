@@ -339,6 +339,11 @@ class OrderManager:
             logger.error(f"✗ _dust_cleanup {token_id[-8:]} | GTC failed: {response}")
             return False
 
+        except PolyApiException as e:
+            # Most common cause: insufficient balance for the GTC order (on-chain allowance
+            # is partially committed to open positions). Log clearly without a full traceback.
+            logger.error(f"💥 _dust_cleanup {token_id[-8:]} | PolyAPI error — {e}")
+            return False
         except Exception:
             logger.exception(f"💥 _dust_cleanup {token_id[-8:]} | Unexpected error")
             return False
@@ -941,6 +946,16 @@ class OrderManager:
                     logger.warning(f"✗ safe_place_order | invalid price {price} for {asset}")
                     return None
 
+                # Early exit: market already near resolution — no edge to capture and
+                # validate_adjust_price would reject it anyway (order_price > PRICE_MAX).
+                # Avoids wasting order-construction cycles on resolved or near-resolved epochs.
+                if price >= Config.NEAR_RESOLVED_THRESHOLD:
+                    logger.debug(
+                        "✗ safe_place_order | %s near-resolved early-exit (mid=%.4f ≥ %.2f) — skip",
+                        asset, price, Config.NEAR_RESOLVED_THRESHOLD,
+                    )
+                    return None
+
                 logger.debug(f"✓ safe_place_order | retrieved price for {asset} #{token_id}: {price}")
 
                 # Calculate base order price (slippage protected)
@@ -1146,6 +1161,7 @@ class OrderManager:
         self.redis.setex(active_asset_key, 300, "1")
 
         base_price = order_price  # updated each attempt with fresh mid
+        last_error = ""           # tracks the last non-empty error across all tiers
 
         for attempt in range(max_retries):
             label, order_type, slippage = OPEN_ATTEMPTS[attempt]
@@ -1260,6 +1276,9 @@ class OrderManager:
                 )
                 return {"success": False, "error": error_msg, "attempts": attempt + 1}
 
+            if error_msg:
+                last_error = error_msg  # preserve across iterations for final log
+
             if did_retry and attempt < max_retries - 1:
                 logger.info(
                     f"⏳ exec_order {asset} | escalating to tier {attempt+2}/{max_retries} after {label} fail"
@@ -1268,8 +1287,9 @@ class OrderManager:
         # All tiers exhausted
         logger.error(
             f"✗ exec_order {asset} | failed {token_short} after {max_retries} attempts"
+            + (f" — last error: {last_error}" if last_error else "")
         )
-        return {"success": False, "error": "Max retries exceeded", "attempts": max_retries}
+        return {"success": False, "error": last_error or "Max retries exceeded", "attempts": max_retries}
 
     async def _handle_order_success(
         self,
@@ -1516,6 +1536,12 @@ class OrderManager:
         if order_price > Config.PRICE_MAX:
             logger.info("✗ validate_adjust_price %-8s | tm=%d | order_price=%.4f > max=%.4f | skipped",
                         asset, trigger_minute, order_price, Config.PRICE_MAX)
+            # Increment session skip counter for PRICE_MAX calibration monitoring.
+            # Visible in balance_check log line; reset on each bot restart.
+            try:
+                self.redis.incr("bot:skip:price_max")
+            except Exception:
+                pass
             return None
 
         if order_price < Config.PRICE_MIN:

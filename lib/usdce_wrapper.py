@@ -63,12 +63,12 @@ def wrap_usdce_to_pusd(min_amount_usdc: float = 1.0, timeout: int = 180) -> Opti
     """
     priv_key = os.environ.get("PRIVATE_KEY")
     if not priv_key:
-        logger.error("wrap_usdce_to_pusd | PRIVATE_KEY env missing")
+        logger.error("✗ wrap_usdce_to_pusd | PRIVATE_KEY env missing")
         return None
 
     w3 = rpc_manager.get_w3(timeout=15)
     if not w3.is_connected():
-        logger.error("wrap_usdce_to_pusd | no RPC available")
+        logger.error("✗ wrap_usdce_to_pusd | no RPC available")
         return None
 
     account = w3.eth.account.from_key(priv_key)
@@ -83,10 +83,10 @@ def wrap_usdce_to_pusd(min_amount_usdc: float = 1.0, timeout: int = 180) -> Opti
     raw_balance = usdce.functions.balanceOf(wallet).call()
     balance     = raw_balance / 10**DECIMALS
     if balance < min_amount_usdc:
-        logger.info(f"wrap_usdce_to_pusd | balance ${balance:.4f} < ${min_amount_usdc:.2f} — skipping")
+        logger.info(f"✓ wrap_usdce_to_pusd | balance ${balance:.4f} < ${min_amount_usdc:.2f} — skipping")
         return None
 
-    logger.info(f"wrap_usdce_to_pusd | wrapping ${balance:.4f} USDC.e → pUSD")
+    logger.info(f"✓ wrap_usdce_to_pusd | wrapping ${balance:.4f} USDC.e → pUSD")
 
     gas_price = w3.to_wei(str(GAS_PRICE_GWEI), "gwei")
     nonce     = w3.eth.get_transaction_count(wallet, "pending")
@@ -94,7 +94,7 @@ def wrap_usdce_to_pusd(min_amount_usdc: float = 1.0, timeout: int = 180) -> Opti
     # 2) one-time approval of the Onramp to spend USDC.e
     current_allowance = usdce.functions.allowance(wallet, onramp_addr).call()
     if current_allowance < raw_balance:
-        logger.info("wrap_usdce_to_pusd | approving CollateralOnramp on USDC.e (one-time)")
+        logger.info("✓ wrap_usdce_to_pusd | approving CollateralOnramp on USDC.e (one-time)")
         approve_tx = usdce.functions.approve(onramp_addr, INFINITE).build_transaction({
             "from":     wallet,
             "nonce":    nonce,
@@ -107,7 +107,7 @@ def wrap_usdce_to_pusd(min_amount_usdc: float = 1.0, timeout: int = 180) -> Opti
         logger.info(f"wrap_usdce_to_pusd | approve tx https://polygonscan.com/tx/{tx_hash.hex()}")
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
         if receipt.status != 1:
-            logger.error(f"wrap_usdce_to_pusd | approve reverted: {tx_hash.hex()}")
+            logger.error(f"✗ wrap_usdce_to_pusd | approve reverted: {tx_hash.hex()}")
             return None
         nonce += 1
 
@@ -124,10 +124,10 @@ def wrap_usdce_to_pusd(min_amount_usdc: float = 1.0, timeout: int = 180) -> Opti
     logger.info(f"wrap_usdce_to_pusd | wrap tx https://polygonscan.com/tx/{tx_hash.hex()}")
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
     if receipt.status != 1:
-        logger.error(f"wrap_usdce_to_pusd | wrap reverted: {tx_hash.hex()}")
+        logger.error(f"✗ wrap_usdce_to_pusd | wrap reverted: {tx_hash.hex()}")
         return None
 
-    logger.info(f"wrap_usdce_to_pusd | ✅ wrapped ${balance:.4f} USDC.e → pUSD in block {receipt.blockNumber}")
+    logger.info(f"✓ wrap_usdce_to_pusd | wrapped ${balance:.4f} USDC.e → pUSD in block {receipt.blockNumber}")
     return tx_hash.hex()
 
 

@@ -31,6 +31,10 @@ class Config:
     POSITION_SIZE = float(os.getenv("POSITION_SIZE", "5.0"))
     PRICE_MIN = float(os.getenv("PRICE_MIN", "0.10"))
     PRICE_MAX = float(os.getenv("PRICE_MAX", "0.90"))
+    # Markets with mid >= this threshold are treated as near-resolved and skipped early,
+    # before order construction and validate_adjust_price are invoked.
+    # Must be >= PRICE_MAX to avoid masking valid high-confidence entries.
+    NEAR_RESOLVED_THRESHOLD = float(os.getenv("NEAR_RESOLVED_THRESHOLD", "0.95"))
     EDGE_THRESHOLD = float(os.getenv("EDGE_THRESHOLD", "10.0")) 
     MIN_WIN_RATE_THRESHOLD = float(os.getenv("MIN_WIN_RATE_THRESHOLD", "60.0"))
     BAR_OPEN_MIN_PCT = 0.03 # bybit 5m move must be at least 0.03%
