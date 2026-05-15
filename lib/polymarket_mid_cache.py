@@ -138,14 +138,19 @@ class PolymarketMidCache:
             backoff = min(MAX_BACKOFF_SECS, 2 ** min(errors - 1, 5))
             self._next_poll_at[token_id] = time.time() + backoff
 
-            if errors == 1 or errors % 10 == 0:
+            # Transient HTTP/2 stream resets against the Polymarket CLOB are
+            # routine (status_code=None, "Request exception!"). The backoff loop
+            # auto-recovers, so don't dump the full ~50-frame httpx traceback
+            # for isolated blips — only log if it *persists*.
+            if errors < 3:
+                logger.debug(
+                    "PolymarketMidCache | poll error for …%s (×%d, backoff=%ss): %s",
+                    token_id[-8:], errors, backoff, exc,
+                )
+            elif errors == 3 or errors % 10 == 0:
                 logger.warning(
                     "⚠️ PolymarketMidCache | poll error for …%s (×%d, backoff=%ss): %s",
-                    token_id[-8:],
-                    errors,
-                    backoff,
-                    exc,
-                    exc_info=True,
+                    token_id[-8:], errors, backoff, exc,
                 )
 
     def _set(self, token_id: str, mid: float) -> None:

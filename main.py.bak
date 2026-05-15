@@ -1079,10 +1079,283 @@ class AppState:
 
 APP_STATE = AppState()
 
-# Feed singletons live here (the classes themselves are in lib/*_feed.py).
-# main() re-instantiates these on every (re)start, so keep these as the
-# canonical place to read "the current feed".
+class CoinbaseFeed:
+    def __init__(self):
+        """Minimal state for Coinbase tracking."""
+        self.last_prices = {k: 0.0 for k in Config.COINBASE_SYMBOLS}
+        self.coinbase_5m_bases = {sym: 0.0 for sym in Config.COINBASE_SYMBOLS}
+        self.coinbase_5m_ts = {sym: 0.0 for sym in Config.COINBASE_SYMBOLS}
+        self.bars = {k: 0 for k in Config.COINBASE_SYMBOLS}
+        self.global_last_snapshot = 0 
+
+        self.running = False
+        self.task: Optional[asyncio.Task] = None
+        
+    def start(self):
+        if self.running or self.task:
+            return
+        self.running = True
+        self.task = asyncio.create_task(self.listen_all())
+
+    def stop(self):
+        if self.task:
+            self.task.cancel()
+            self.task = None
+        self.running = False
+
+    def update_from_coinbase(self, product_id: str, price: float):
+        """Update Coinbase price tracking. Returns True if new 5m bar."""
+        reverse = {v: k for k, v in Config.COINBASE_SYMBOLS.items()}
+        
+        if product_id not in reverse:
+            logger.warning(f"📥 update_from_coinbase | Unknown: {product_id}")
+            return False
+        
+        internal_sym = reverse[product_id]
+        now = time.time()
+        bar_start = get_current_5m_bar_ts(now)
+        
+        # Always track latest price
+        self.last_prices[internal_sym] = price
+        
+        # Check for new 5m bar
+        prior_bar = self.bars.get(internal_sym)
+        if prior_bar == bar_start:
+            return False
+        
+        self.bars[internal_sym] = bar_start
+        
+        # First update ever
+        if prior_bar is None:
+            self.coinbase_5m_bases[internal_sym] = price
+            self.coinbase_5m_ts[internal_sym] = now
+            logger.debug(f"📥 update_from_coinbase | First {internal_sym} (bar {bar_start})")
+            return False
+        
+        # NEW 5M BAR - log snapshot
+        logger.debug(f"🕐 update_from_coinbase | New bar {internal_sym} at {bar_start}")
+        
+         # Global snapshot logging (once per bar across all symbols)
+        if bar_start != self.global_last_snapshot:
+            self.global_last_snapshot = bar_start
+            logger.debug("🔄 update_from_chainlink | Logging ALL assets snapshot")
+
+            # Log all assets snapshot
+            for s in self.coinbase_5m_bases:
+                base = self.coinbase_5m_bases[s]
+                current_price = self.last_prices[s]
+
+                if base == 0.0:
+                    logger.debug(f"⏳ update_from_coinbase | {s}: {current_price:.4f} | FIRST")
+                else:
+                    change_pct = 100.0 * (current_price - base) / base
+                    direction = "🟢   UP" if change_pct > 0 else "🔴 DOWN" if change_pct < 0 else "⚪ FLAT"
+                    logger.info(
+                        f"🔄 update_from_coinbase  | {direction} | {s:>9} | {change_pct:+.3f}% | {current_price:10.4f} | {bar_start}"
+                    )
+
+        # Set true 5m bar open (first price of new bar)
+        self.coinbase_5m_bases[internal_sym] = price
+        self.coinbase_5m_ts[internal_sym] = now
+        
+        return True
+    
+    async def listen_all(self):
+        url = "wss://advanced-trade-ws.coinbase.com"
+        products = list(Config.COINBASE_SYMBOLS.values())
+
+        while True:
+            try:
+                async with websockets.connect(url, ping_interval=20, ping_timeout=30) as ws:
+                    logger.info(f"✓ CoinbaseFeed | Connected and subscribed to {url} for {products}")
+                    await ws.send(json.dumps({
+                        "type": "subscribe",
+                        "channel": "ticker",
+                        "product_ids": products,
+                    }))
+                    async for msg in ws:
+                        if not isinstance(msg, str):
+                            continue
+                        try:
+                            data = json.loads(msg)
+                        except json.JSONDecodeError:
+                            continue
+                        if data.get("channel") != "ticker":
+                            continue
+                        for event in data.get("events", []):
+                            if not isinstance(event, dict):
+                                continue
+                            for tick in event.get("tickers", []):
+                                if not isinstance(tick, dict):
+                                    continue
+                                product_id = tick.get("product_id")
+                                price_str = tick.get("price")
+                                if not product_id or price_str is None:
+                                    continue
+                                try:
+                                    price = float(price_str)
+                                except (TypeError, ValueError):
+                                    continue
+                                self.update_from_coinbase(product_id, price)
+
+            except (websockets.ConnectionClosed, ConnectionResetError) as e:
+                logger.warning(f"⚠️ CoinbaseFeed | WebSocket disconnected, reconnecting in 3s: {e}")
+                await asyncio.sleep(3)
+            except Exception as e:
+                logger.exception(f"✗ CoinbaseFeed | top-level error: {e!r}")
+                await asyncio.sleep(5)
+
 coinbase_feed = CoinbaseFeed()
+
+class ChainlinkFeed:
+    def __init__(self):
+        self.last_prices = Config.CHAINLINK_SYMBOLS.copy()
+        self.chainlink_5m_bases = {sym: 0.0 for sym in Config.CHAINLINK_SYMBOLS}
+        self.chainlink_5m_ts = {sym: 0.0 for sym in Config.CHAINLINK_SYMBOLS}
+        self.chainlink_bars = {}
+        self.chainlink_last_update_ts: Dict[str, float] = {}
+        self.global_last_snapshot = 0
+
+        self.running = False
+        self.task: Optional[asyncio.Task] = None
+
+    def start(self):
+        if self.running or self.task:
+            return
+        self.running = True
+        self.task = asyncio.create_task(self.listen_all())
+
+    def stop(self):
+        if self.task:
+            self.task.cancel()
+            self.task = None
+        self.running = False
+
+    def update_from_chainlink(self, symbol: str, price: float):
+        """Update Chainlink price tracking. Returns True if new 5m bar started."""
+        now = time.time()
+        bar_start = get_current_5m_bar_ts(now)
+
+        symbol = symbol.lower()
+        self.last_prices[symbol] = price
+        self.chainlink_last_update_ts[symbol] = now  # track oracle freshness
+
+        # Check if new 5m bar
+        prior_bar = self.chainlink_bars.get(symbol)
+        if prior_bar == bar_start:
+            return False  # Same bar, no action needed
+
+        self.chainlink_bars[symbol] = bar_start
+
+        # First update ever - initialize 5m base
+        if prior_bar is None:
+            self.chainlink_5m_bases[symbol] = price
+            self.chainlink_5m_ts[symbol] = now
+            logger.debug(f"📥 update_from_chainlink | First {symbol} (bar {bar_start})")
+            return False
+
+        logger.debug(f"🕐 update_from_chainlink | New 5min bar {symbol} at {bar_start}")
+
+        # Global snapshot logging (once per bar across all symbols)
+        if bar_start != self.global_last_snapshot:
+            self.global_last_snapshot = bar_start
+            logger.debug("🔄 update_from_chainlink | Logging ALL assets snapshot")
+
+            for s in self.chainlink_5m_bases:
+                base = self.chainlink_5m_bases[s]
+                current_price = self.last_prices[s]
+
+                if base == 0.0:
+                    logger.debug(f"⏳ update_from_chainlink | {s.upper()}: {current_price:.4f} | FIRST")
+                else:
+                    change_pct = 100.0 * (current_price - base) / base
+                    direction = "🟢   UP" if change_pct > 0 else "🔴 DOWN" if change_pct < 0 else "⚪ FLAT"
+                    logger.info(
+                        f"🔄 update_from_chainlink | {direction} | {s.upper():>9} | {change_pct:+.3f}% | {current_price:10.4f} | {bar_start}"
+                    )
+                
+        # Set 5m base for this symbol (true bar open price)
+        self.chainlink_5m_bases[symbol] = price
+        self.chainlink_5m_ts[symbol] = now
+        
+        return True
+
+    async def listen_all(self):
+        _retry_count = 0
+        _disconnect_ts: Optional[float] = None
+        while True:
+            try:
+                async with websockets.connect(Config.WS_URL, ping_interval=20, ping_timeout=30) as ws:
+                    # Successful (re)connect — reset backoff state
+                    if _disconnect_ts is not None:
+                        down_secs = int(time.time() - _disconnect_ts)
+                        logger.info(f"✓ ChainlinkFeed | Reconnected after {down_secs}s down")
+                    _retry_count = 0
+                    _disconnect_ts = None
+
+                    await ws.send(json.dumps({
+                        "action": "subscribe",
+                        "subscriptions": [
+                            {
+                                "topic": Config.CHAINLINK_FEED,
+                                "type": "*",
+                                "filters": ""
+                            }
+                        ]
+                    }))
+                    logger.info(f"✓ ChainlinkFeed | Connected and subscribed to {Config.CHAINLINK_FEED} for {list(Config.CHAINLINK_SYMBOLS.keys())}")
+
+                    async for msg in ws:
+                        if not isinstance(msg, str):
+                            continue
+
+                        try:
+                            data = json.loads(msg)
+                        except json.JSONDecodeError:
+                            logger.debug(f"💬 ChainlinkFeed | Non-JSON/ws-control: {repr(msg)}")
+                            continue
+
+                        if data.get("topic") != Config.CHAINLINK_FEED:
+                            continue
+
+                        payload = data.get("payload")
+                        if not payload:
+                            continue
+
+                        symbol = payload.get("symbol")
+                        if not symbol or symbol not in Config.CHAINLINK_SYMBOLS:
+                            continue
+
+                        try:
+                            price = float(payload["value"])
+                        except (ValueError, TypeError):
+                            continue
+
+                        logger.debug(
+                            f"✓ ChainlinkFeed | {symbol.upper()}: {price:.4f} "
+                            f"@ {payload.get('timestamp', 'N/A')}"
+                        )
+
+                        self.update_from_chainlink(symbol, price)
+
+            except (websockets.ConnectionClosed, ConnectionResetError) as e:
+                if _disconnect_ts is None:
+                    _disconnect_ts = time.time()
+                _retry_count += 1
+                wait = min(3 * (2 ** (_retry_count - 1)), 60)
+                down_secs = int(time.time() - _disconnect_ts)
+                logger.warning(f"⚠️ ChainlinkFeed | Disconnected ({down_secs}s), retry #{_retry_count} in {wait}s: {e}")
+                if down_secs > 60:
+                    await send_alert(f"⚠️ <b>Chainlink feed down</b> for {down_secs}s\nRetry #{_retry_count} — signals may use only Bybit+Coinbase")
+                await asyncio.sleep(wait)
+            except Exception as e:
+                if _disconnect_ts is None:
+                    _disconnect_ts = time.time()
+                _retry_count += 1
+                wait = min(5 * (2 ** (_retry_count - 1)), 60)
+                logger.exception(f"✗ ChainlinkFeed | top-level error (retry #{_retry_count} in {wait}s): {e!r}")
+                await asyncio.sleep(wait)
+
 chainlink_feed = ChainlinkFeed()
 binance_feed = BinanceFeed()
 
@@ -1503,4 +1776,3 @@ if __name__ == "__main__":
     except Exception as e:         
         logger.error(f"💥 main | Crashed: {e}", exc_info=True)
     finally:
-        logger.info("✓ main | Shutdown complete")
