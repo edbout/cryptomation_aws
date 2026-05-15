@@ -702,6 +702,26 @@ class BybitManager:
             )
             self._last_trigger_ts[sym] = now_ts
 
+            # Near-resolved early-exit — skip the async trade trigger when the
+            # Polymarket contract is already priced near settlement so we don't waste
+            # signal-evaluation and order-construction cycles that order_manager would
+            # discard anyway.  Checking the cached YES mid is sufficient: if YES ≥ 0.95
+            # then buying YES has no edge; if YES ≤ 0.05 then NO ≥ 0.95 and buying NO
+            # has no edge either.  Falls back to triggering normally when no cached mid
+            # is available yet (cache miss).
+            if asset_key in self._token_cache:
+                _yes_id, _ = self._token_cache[asset_key]
+                _cached_mid = POLY_MID_CACHE.get(_yes_id)
+                if _cached_mid is not None and (
+                    _cached_mid >= Config.NEAR_RESOLVED_THRESHOLD
+                    or _cached_mid <= 1.0 - Config.NEAR_RESOLVED_THRESHOLD
+                ):
+                    logger.debug(
+                        "⏭️ _on_ticker | %s near-resolved (yes_mid=%.4f) — skip trigger",
+                        sym, _cached_mid,
+                    )
+                    return
+
             # Set BTC momentum flag so lagging assets get a 60s window
             if sym == "BTCUSD":
                 self._btc_momentum_direction = "UP" if pct_change > 0 else "DOWN"
