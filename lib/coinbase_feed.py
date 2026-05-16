@@ -42,6 +42,9 @@ class CoinbaseFeed:
         self.task: Optional[asyncio.Task] = None
 
     def start(self):
+        if not Config.COINBASE_ENABLED:
+            logger.info("✗ CoinbaseFeed | COINBASE_ENABLED=false, not starting")
+            return
         if self.running or self.task:
             return
         self.running = True

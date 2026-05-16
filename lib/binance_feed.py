@@ -220,17 +220,18 @@ class BinanceFeed:
             return
 
         high_vol = self.volume_trackers[sym].has_high_volume_prev_minute(
-            sym, multiplier=Config.BINANCE_VOL_MULTIPLIER,
-            lookback=Config.BINANCE_VOL_LOOKBACK,
-        )
+            sym, multiplier=Config.VOL_MULTIPLIER,
+            lookback=Config.VOL_LOOKBACK,
+        ) if Config.REQUIRE_VOL else True
+
         if not high_vol:
             logger.debug(
                 "🚫 binance_trigger | %s pct=%+.3f%% but volume below avg ×%.2f",
-                sym, pct, Config.BINANCE_VOL_MULTIPLIER,
+                sym, pct, Config.VOL_MULTIPLIER,
             )
             return
 
-        if now_ts - self._last_trigger_ts[sym] < Config.BINANCE_TRIGGER_THROTTLE_SEC:
+        if now_ts - self._last_trigger_ts[sym] < Config.TRIGGER_THROTTLE_SEC:
             return
         self._last_trigger_ts[sym] = now_ts
 

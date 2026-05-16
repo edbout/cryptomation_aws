@@ -14,6 +14,10 @@ except ImportError:
 class Config:
     """Centralized configuration from environment variables (Heroku config vars)."""
     
+
+    # Runtime mode
+    DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
+    
     # Metamask Keys (required)
     PRIVATE_KEY = os.getenv("PRIVATE_KEY", "").strip()
     PUBLIC_KEY = os.getenv("PUBLIC_KEY", "").strip() 
@@ -22,9 +26,6 @@ class Config:
     # Polymarket API builder code
     BUILDER_CODE = os.getenv("BUILDER_CODE", "").strip()
 
-    # Runtime mode
-    DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
-    
     RPC = os.getenv("RPC", "https://polygon-mainnet.g.alchemy.com/v2/t4rRXOnpdSGvA2BRO1awx")
 
     # Trading sizes and thresholds (with validation)
@@ -59,6 +60,11 @@ class Config:
 
     # Volume filter
     REQUIRE_VOL = os.getenv("REQUIRE_VOL", "true").lower() == "true"
+    # Above-average volume gate for Binance triggers.
+    # Mirrors the existing Bybit VolumeTracker pattern:
+    #   high_vol_minute = last_closed_1m_volume > mean(prev N 1m candles) * multiplier
+    VOL_MULTIPLIER = float(os.getenv("VOL_MULTIPLIER", "1.1"))
+    VOL_LOOKBACK   = int(os.getenv("VOL_LOOKBACK",   "10"))
 
     # Telegram alerting
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -90,10 +96,14 @@ class Config:
     # e.g. 1.4 → XRP effective threshold becomes 0.18 * 1.4 = 0.25 during lag moves.
     OBI_BTC_LAG_RELAX: float = float(os.getenv("OBI_BTC_LAG_RELAX", "1.4"))
 
-    # Assets and symbols (can be expanded easily)
+    # Polymarket Assets and symbols
+    WS_URL = "wss://ws-live-data.polymarket.com"
     ASSETS = ["BTCUSDT","ETHUSDT","XRPUSDT","SOLUSDT"]
 
     BYBIT_SYMBOLS = ["BTCUSD", "ETHUSD", "XRPUSD", "SOLUSD"]
+
+    # Binance Spot symbols additional trigger source (parallel to Bybit)
+    BINANCE_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT"]
 
     COINBASE_SYMBOLS = {
         "BTC-PERP": "BTC-PERP-INTX",
@@ -102,31 +112,21 @@ class Config:
         "SOL-PERP": "SOL-PERP-INTX",
     }
 
+    CHAINLINK_FEED = "crypto_prices_chainlink"
     CHAINLINK_SYMBOLS = {
         "btc/usd": 0.0,
         "eth/usd": 0.0,
         "xrp/usd": 0.0,
         "sol/usd": 0.0,
     }
-    WS_URL = "wss://ws-live-data.polymarket.com"
-    CHAINLINK_FEED = "crypto_prices_chainlink"
 
-    # ----------------------------------------------------------------------
-    # Binance Spot — additional trigger source (parallel to Bybit)
-    # ----------------------------------------------------------------------
     BINANCE_ENABLED = os.getenv("BINANCE_ENABLED", "true").lower() == "true"
+    BYBIT_ENABLED = os.getenv("BYBIT_ENABLED", "true").lower() == "true"
+    COINBASE_ENABLED = os.getenv("COINBASE_ENABLED", "true").lower() == "true"
+    CHAINLINK_ENABLED = os.getenv("CHAINLINK_ENABLED", "true").lower() == "true"   
 
-    # Binance Spot symbols (USDT pairs — same string as ASSETS, conveniently)
-    BINANCE_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT"]
-
-    # Above-average volume gate for Binance triggers.
-    # Mirrors the existing Bybit VolumeTracker pattern:
-    #   high_vol_minute = last_closed_1m_volume > mean(prev N 1m candles) * multiplier
-    BINANCE_VOL_MULTIPLIER = float(os.getenv("BINANCE_VOL_MULTIPLIER", "1.25"))
-    BINANCE_VOL_LOOKBACK   = int(os.getenv("BINANCE_VOL_LOOKBACK",   "10"))
-
-    # Per-symbol Binance trigger throttle (seconds). Mirrors Bybit _last_trigger_ts.
-    BINANCE_TRIGGER_THROTTLE_SEC = float(os.getenv("BINANCE_TRIGGER_THROTTLE_SEC", "5.0"))
+    # Per-symbol trigger throttle (seconds). Mirrors Bybit _last_trigger_ts.
+    TRIGGER_THROTTLE_SEC = float(os.getenv("TRIGGER_THROTTLE_SEC", "5.0"))
 
     # ----------------------------------------------------------------------
     # Alignment gate: N-of-M direction agreement across trigger sources.
