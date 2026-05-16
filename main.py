@@ -67,116 +67,10 @@ from redeem import run_redeem_non_interactive
 from lib.helpers import  get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts, normalize_asset
 from lib.telegram_alert import send_alert
 from lib.polymarket_mid_cache import POLY_MID_CACHE
-
-@dataclass
-class TickData:
-    last_price: float
-    candle_5m_pct: float
-    high_volume: bool
-    order_book_imbalance: float = 0.0
-    candle_seconds: float = 0.0  # seconds elapsed since 5m epoch start
-
-class OrderBookTracker:
-    """Tracks rolling order book imbalance from Bybit top-of-book data.
-    OBI = (bid_qty - ask_qty) / (bid_qty + ask_qty)
-    Smoothed over last N poll samples (each ~5s) to reduce noise.
-    Also exposes trend(): positive = OBI improving toward balance,
-    negative = OBI worsening. Used by trend-aware suppression (Change 2).
-    """
-    def __init__(self, window: int = 6):  # 6 × 5s = 30s rolling window
-        self.history: deque = deque(maxlen=window)
-
-    def update(self, bid_qty: float, ask_qty: float) -> float:
-        total = bid_qty + ask_qty
-        if total == 0:
-            return 0.0
-        raw_obi = (bid_qty - ask_qty) / total
-        self.history.append(raw_obi)
-        return self.get()
-
-    def get(self) -> float:
-        if not self.history:
-            return 0.0
-        return sum(self.history) / len(self.history)
-
-    def trend(self) -> float:
-        """Linear regression slope of OBI samples over the rolling window.
-        Positive  → OBI improving (moving toward 0 or positive).
-        Negative  → OBI worsening (moving further negative).
-        Returns 0.0 if fewer than 3 samples are available.
-        """
-        h = list(self.history)
-        n = len(h)
-        if n < 3:
-            return 0.0
-        mean_x = (n - 1) / 2.0
-        mean_y = sum(h) / n
-        num = sum((i - mean_x) * (h[i] - mean_y) for i in range(n))
-        den = sum((i - mean_x) ** 2 for i in range(n))
-        return num / den if den != 0 else 0.0
-
-class VolumeTracker:
-    def __init__(self, max_history: int = 20):
-        self.volume_history = deque(maxlen=max_history)
-        self.current_minute_start = None
-        self._current_minute_volume = 0.0
-
-    def update_stream_volume(self, symbol: str, volume_delta: float, timestamp: float):
-        """Process stream tick. Aggregates into 1min buckets."""
-        minute_start = int(timestamp // 60) * 60  # Floor to minute boundary
-        if self.current_minute_start != minute_start:
-            # Close previous minute, start new
-            if self.current_minute_start is not None and self._current_minute_volume > 0:
-                self.volume_history.append({
-                    "symbol": symbol,
-                    "minute_start": self.current_minute_start,
-                    "volume": self._current_minute_volume
-                })
-            self.current_minute_start = minute_start
-            self._current_minute_volume = 0.0
-
-        self._current_minute_volume += volume_delta
-
-    def _avg_volume_last_n(self, volumes: list, n: int = 10) -> Optional[float]:
-        if len(volumes) < n:
-            return None
-        return sum(volumes[-n:]) / n
-
-    def is_high_volume_minute(self, symbol: str, multiplier: float = 1.25, lookback: int = 10) -> bool:
-        """Check if latest completed 1m candle is high volume vs previous lookback candles."""
-        history = list(self.volume_history)
-        if len(history) < lookback + 1:
-            return False
-
-        latest_volume = history[-1]["volume"]
-        baseline = self._avg_volume_last_n([c["volume"] for c in history[:-1]], lookback)
-        if baseline is None or baseline == 0:
-            return False
-
-        high_volume = latest_volume > (baseline * multiplier)
-        logger.debug(
-            "📊 is_high_volume_minute | %s 1M VOL: %.0f > %.0f*%.2f=%.0f? %s",
-            symbol, latest_volume, baseline, multiplier, baseline * multiplier, high_volume
-        )
-        return high_volume
-
-    def has_high_volume_prev_minute(self, symbol: str, multiplier: float = 1.25, lookback: int = 10) -> bool:
-        """Check if previous completed 1m candle is high volume vs prior lookback candles."""
-        history = list(self.volume_history)
-        if len(history) < lookback + 2:
-            return False
-
-        prev_volume = history[-2]["volume"]
-        baseline = self._avg_volume_last_n([c["volume"] for c in history[:-2]], lookback)
-        if baseline is None or baseline == 0:
-            return False
-
-        high_volume = prev_volume > (baseline * multiplier)
-        logger.debug(
-            "📊 has_high_volume_prev_minute | %s PREV1M VOL: %.0f > %.0f*%.2f=%.0f? %s",
-            symbol, prev_volume, baseline, multiplier, baseline * multiplier, high_volume
-        )
-        return high_volume
+from lib.binance_feed import BinanceFeed
+from lib.coinbase_feed import CoinbaseFeed
+from lib.chainlink_feed import ChainlinkFeed
+from lib.bybit_trackers import TickData, OrderBookTracker, VolumeTracker
 
 class BybitCandle5m:
     def __init__(self):
@@ -295,7 +189,7 @@ class BybitCandle5m:
         return updated
 
     def _update_order_outcomes(self, symbol: str, bar_pct: float, bar_start_ts: int):
-        """Write Bybit/Coinbase/Chainlink consensus direction to orders placed during the closed bar."""
+        """Write Bybit/Binance/Coinbase/Chainlink consensus direction to orders placed during the closed bar."""
         asset = normalize_asset(symbol)
         pending_key = f"orders:pending_outcome:{asset}"
         order_ids = self.redis.zrangebyscore(pending_key, bar_start_ts, bar_start_ts)
@@ -306,8 +200,10 @@ class BybitCandle5m:
         directions = [bybit_dir]
         coinbase_dir = ''
         chainlink_dir = ''
+        binance_dir = ''
         cb_pct = None
         cl_pct = None
+        bn_pct = None
 
         try:
             global BYBIT_MANAGER
@@ -320,6 +216,16 @@ class BybitCandle5m:
                     cb_pct = (cb_cur - cb_base) / cb_base * 100
                     coinbase_dir = 'UP' if cb_pct > 0 else 'DOWN'
                     directions.append(coinbase_dir)
+
+                # Binance Spot: BTCUSD → BTCUSDT
+                if Config.BINANCE_ENABLED and BYBIT_MANAGER.binance_feed is not None:
+                    bn_sym = symbol + 'T'
+                    bn_cur  = BYBIT_MANAGER.binance_feed.last_prices.get(bn_sym, 0.0)
+                    bn_base = BYBIT_MANAGER.binance_feed.binance_5m_bases.get(bn_sym, 0.0)
+                    if bn_cur > 0 and bn_base > 0:
+                        bn_pct = (bn_cur - bn_base) / bn_base * 100
+                        binance_dir = 'UP' if bn_pct > 0 else 'DOWN'
+                        directions.append(binance_dir)
 
                 # Chainlink: BTCUSD → btc/usd
                 cl_sym = symbol.replace('USD', '').lower() + '/usd'
@@ -340,6 +246,8 @@ class BybitCandle5m:
             self.redis.hset(f"order:{order_id}", mapping={
                 'bar_direction':  bybit_dir,
                 'bar_pct':        round(bar_pct, 3),
+                'bar_binance':    binance_dir,
+                'bar_bin_pct':    '' if bn_pct is None else round(bn_pct, 3),
                 'bar_coinbase':   coinbase_dir,
                 'bar_cb_pct':     '' if cb_pct is None else round(cb_pct, 3),
                 'bar_chainlink':  chainlink_dir,
@@ -349,8 +257,8 @@ class BybitCandle5m:
                 'bar_updated_at': now_ts,
             })
             logger.info(
-                "📊 update_order_outcomes | %s | %s → %s (bybit) | CB:%s CL:%s | consensus:%s %s",
-                asset, order_id[:8], bybit_dir, coinbase_dir or '?', chainlink_dir or '?', consensus, agree
+                "📊 update_order_outcomes | %s | %s → %s (bybit) | BN:%s CB:%s CL:%s | consensus:%s %s",
+                asset, order_id[:8], bybit_dir, binance_dir or '?', coinbase_dir or '?', chainlink_dir or '?', consensus, agree
             )
 
         self.redis.zrem(pending_key, *order_ids)
@@ -436,6 +344,7 @@ class BybitManager:
         self.data: Dict[str, TickData] = {}  # Per-symbol ticks
         self.chainlink_feed = chainlink_feed
         self.coinbase_feed = coinbase_feed
+        self.binance_feed = binance_feed
         self.bybit_candles: Dict[str, BybitCandle5m] = {
             sym: BybitCandle5m() for sym in Config.BYBIT_SYMBOLS
         }
@@ -936,27 +845,56 @@ class BybitManager:
             else:
                 coinbase_pct = 0.0
 
-            # Alignment: Bybit + Coinbase only (Chainlink excluded — oracle fires only on
-            # 0.5%+ moves, so it's stale on nearly every signal at our 0.03% threshold).
-            # Chainlink direction is still recorded in the consensus dict for outcome tracking.
-            strong_enough = abs(bybit_5m_pct) > 0.03 and abs(coinbase_pct) > 0.03
-            same_direction = (bybit_5m_pct > 0) == (coinbase_pct > 0)
-            max_div = max(0.12, abs(bybit_5m_pct) * 0.6)  # relative ±60%, min 0.12%
-            not_too_far = abs(bybit_5m_pct - coinbase_pct) <= max_div
+            # Binance Spot pct (5m bar). BTCUSD → BTCUSDT mapping.
+            binance_sym = normalize_asset(sym)
+            binance_pct = 0.0
+            if Config.BINANCE_ENABLED and self.binance_feed is not None:
+                bn_current = self.binance_feed.last_prices.get(binance_sym, 0.0)
+                bn_base_5m = self.binance_feed.binance_5m_bases.get(binance_sym, 0.0)
+                if bn_current > 0 and bn_base_5m > 0:
+                    binance_pct = 100.0 * (bn_current - bn_base_5m) / bn_base_5m
 
-            aligned = strong_enough and same_direction and not_too_far
+            # ----------------------------------------------------------------
+            # Alignment: N-of-M direction voting across
+            #   {Bybit Futures, Binance Spot, Coinbase Futures}.
+            # A source "votes" only when |pct| > ALIGNMENT_MIN_PCT.
+            # Aligned when >= ALIGNMENT_MIN_SOURCES of the active votes agree on
+            # direction. Chainlink stays informational only.
+            # ----------------------------------------------------------------
+            min_pct = Config.ALIGNMENT_MIN_PCT
+            votes = []  # list of (label, pct)
+            if abs(bybit_5m_pct) > min_pct:
+                votes.append(("bybit", bybit_5m_pct))
+            if Config.BINANCE_ENABLED and abs(binance_pct) > min_pct:
+                votes.append(("binance", binance_pct))
+            if abs(coinbase_pct) > min_pct:
+                votes.append(("coinbase", coinbase_pct))
+
+            ups = sum(1 for _, p in votes if p > 0)
+            downs = sum(1 for _, p in votes if p < 0)
+            direction_votes = max(ups, downs)
+            agree_dir = "UP" if ups >= downs else "DOWN"
+            aligned = direction_votes >= Config.ALIGNMENT_MIN_SOURCES
+
+            # Sources considered (for the agree string denominator). Always 3 when
+            # Binance is enabled, 2 otherwise — gives a stable "X/3" or "X/2" string.
+            n_sources = 3 if Config.BINANCE_ENABLED else 2
+
             if not aligned:
                 logger.info(
                         f"🚫 get_signal | {sym:>8} | Bybit: {bybit_5m_pct:+.2f}% | "
-                        f"Coinbase: {coinbase_pct:+.2f}% | Chainlink: {chainlink_pct:+.2f}% (age={chainlink_age:.0f}s) | "
-                        f"strong={strong_enough} dir={same_direction} div_ok={not_too_far}"
+                        f"Binance: {binance_pct:+.2f}% | Coinbase: {coinbase_pct:+.2f}% | "
+                        f"Chainlink: {chainlink_pct:+.2f}% (age={chainlink_age:.0f}s, info) | "
+                        f"votes={direction_votes}/{n_sources} need {Config.ALIGNMENT_MIN_SOURCES}"
                     )
                 rdb.hincrby(f"stats:trade:{normalize_asset(sym)}", "alignment_fail", 1)
                 return None
             else:
                 logger.info(
                         f"📊 get_signal | {sym:>8} | Bybit: {bybit_5m_pct:+.2f}% | "
-                        f"Coinbase: {coinbase_pct:+.2f}% | Chainlink: {chainlink_pct:+.2f}% (age={chainlink_age:.0f}s, info) | Aligned"
+                        f"Binance: {binance_pct:+.2f}% | Coinbase: {coinbase_pct:+.2f}% | "
+                        f"Chainlink: {chainlink_pct:+.2f}% (age={chainlink_age:.0f}s, info) | "
+                        f"Aligned {direction_votes}/{n_sources} → {agree_dir}"
                     )
                 rdb.hincrby(f"stats:trade:{normalize_asset(sym)}", "alignment_pass", 1)
 
@@ -998,14 +936,16 @@ class BybitManager:
                     return None
 
                 bybit_dir = "UP" if bybit_5m_pct > 0 else "DOWN"
-                cb_dir = "UP" if coinbase_pct > 0 else "DOWN"
+                cb_dir = "UP" if coinbase_pct > 0 else ("DOWN" if coinbase_pct < 0 else "")
                 cl_dir = "UP" if chainlink_pct > 0 else ("DOWN" if chainlink_pct < 0 else "")
+                binance_dir = "UP" if binance_pct > 0 else ("DOWN" if binance_pct < 0 else "")
 
                 consensus = {
                     "bybit_dir": bybit_dir,
+                    "binance_dir": binance_dir,
                     "cb_dir": cb_dir,
                     "cl_dir": cl_dir,
-                    "agree": "2/2",
+                    "agree": f"{direction_votes}/{n_sources}",
                 }
 
                 return normalize_asset(sym), side, bybit_5m_pct, open_price, consensus
@@ -1050,284 +990,12 @@ class AppState:
 
 APP_STATE = AppState()
 
-class CoinbaseFeed:
-    def __init__(self):
-        """Minimal state for Coinbase tracking."""
-        self.last_prices = {k: 0.0 for k in Config.COINBASE_SYMBOLS}
-        self.coinbase_5m_bases = {sym: 0.0 for sym in Config.COINBASE_SYMBOLS}
-        self.coinbase_5m_ts = {sym: 0.0 for sym in Config.COINBASE_SYMBOLS}
-        self.bars = {k: 0 for k in Config.COINBASE_SYMBOLS}
-        self.global_last_snapshot = 0 
-
-        self.running = False
-        self.task: Optional[asyncio.Task] = None
-        
-    def start(self):
-        if self.running or self.task:
-            return
-        self.running = True
-        self.task = asyncio.create_task(self.listen_all())
-
-    def stop(self):
-        if self.task:
-            self.task.cancel()
-            self.task = None
-        self.running = False
-
-    def update_from_coinbase(self, product_id: str, price: float):
-        """Update Coinbase price tracking. Returns True if new 5m bar."""
-        reverse = {v: k for k, v in Config.COINBASE_SYMBOLS.items()}
-        
-        if product_id not in reverse:
-            logger.warning(f"📥 update_from_coinbase | Unknown: {product_id}")
-            return False
-        
-        internal_sym = reverse[product_id]
-        now = time.time()
-        bar_start = get_current_5m_bar_ts(now)
-        
-        # Always track latest price
-        self.last_prices[internal_sym] = price
-        
-        # Check for new 5m bar
-        prior_bar = self.bars.get(internal_sym)
-        if prior_bar == bar_start:
-            return False
-        
-        self.bars[internal_sym] = bar_start
-        
-        # First update ever
-        if prior_bar is None:
-            self.coinbase_5m_bases[internal_sym] = price
-            self.coinbase_5m_ts[internal_sym] = now
-            logger.debug(f"📥 update_from_coinbase | First {internal_sym} (bar {bar_start})")
-            return False
-        
-        # NEW 5M BAR - log snapshot
-        logger.debug(f"🕐 update_from_coinbase | New bar {internal_sym} at {bar_start}")
-        
-         # Global snapshot logging (once per bar across all symbols)
-        if bar_start != self.global_last_snapshot:
-            self.global_last_snapshot = bar_start
-            logger.debug("🔄 update_from_chainlink | Logging ALL assets snapshot")
-
-            # Log all assets snapshot
-            for s in self.coinbase_5m_bases:
-                base = self.coinbase_5m_bases[s]
-                current_price = self.last_prices[s]
-
-                if base == 0.0:
-                    logger.debug(f"⏳ update_from_coinbase | {s}: {current_price:.4f} | FIRST")
-                else:
-                    change_pct = 100.0 * (current_price - base) / base
-                    direction = "🟢   UP" if change_pct > 0 else "🔴 DOWN" if change_pct < 0 else "⚪ FLAT"
-                    logger.info(
-                        f"🔄 update_from_coinbase  | {direction} | {s:>9} | {change_pct:+.3f}% | {current_price:10.4f} | {bar_start}"
-                    )
-
-        # Set true 5m bar open (first price of new bar)
-        self.coinbase_5m_bases[internal_sym] = price
-        self.coinbase_5m_ts[internal_sym] = now
-        
-        return True
-    
-    async def listen_all(self):
-        url = "wss://advanced-trade-ws.coinbase.com"
-        products = list(Config.COINBASE_SYMBOLS.values())
-
-        while True:
-            try:
-                async with websockets.connect(url, ping_interval=20, ping_timeout=30) as ws:
-                    logger.info(f"✓ CoinbaseFeed | Connected and subscribed to {url} for {products}")
-                    await ws.send(json.dumps({
-                        "type": "subscribe",
-                        "channel": "ticker",
-                        "product_ids": products,
-                    }))
-                    async for msg in ws:
-                        if not isinstance(msg, str):
-                            continue
-                        try:
-                            data = json.loads(msg)
-                        except json.JSONDecodeError:
-                            continue
-                        if data.get("channel") != "ticker":
-                            continue
-                        for event in data.get("events", []):
-                            if not isinstance(event, dict):
-                                continue
-                            for tick in event.get("tickers", []):
-                                if not isinstance(tick, dict):
-                                    continue
-                                product_id = tick.get("product_id")
-                                price_str = tick.get("price")
-                                if not product_id or price_str is None:
-                                    continue
-                                try:
-                                    price = float(price_str)
-                                except (TypeError, ValueError):
-                                    continue
-                                self.update_from_coinbase(product_id, price)
-
-            except (websockets.ConnectionClosed, ConnectionResetError) as e:
-                logger.warning(f"⚠️ CoinbaseFeed | WebSocket disconnected, reconnecting in 3s: {e}")
-                await asyncio.sleep(3)
-            except Exception as e:
-                logger.exception(f"✗ CoinbaseFeed | top-level error: {e!r}")
-                await asyncio.sleep(5)
-
+# Feed singletons live here (the classes themselves are in lib/*_feed.py).
+# main() re-instantiates these on every (re)start, so keep these as the
+# canonical place to read "the current feed".
 coinbase_feed = CoinbaseFeed()
-
-class ChainlinkFeed:
-    def __init__(self):
-        self.last_prices = Config.CHAINLINK_SYMBOLS.copy()
-        self.chainlink_5m_bases = {sym: 0.0 for sym in Config.CHAINLINK_SYMBOLS}
-        self.chainlink_5m_ts = {sym: 0.0 for sym in Config.CHAINLINK_SYMBOLS}
-        self.chainlink_bars = {}
-        self.chainlink_last_update_ts: Dict[str, float] = {}
-        self.global_last_snapshot = 0
-
-        self.running = False
-        self.task: Optional[asyncio.Task] = None
-
-    def start(self):
-        if self.running or self.task:
-            return
-        self.running = True
-        self.task = asyncio.create_task(self.listen_all())
-
-    def stop(self):
-        if self.task:
-            self.task.cancel()
-            self.task = None
-        self.running = False
-
-    def update_from_chainlink(self, symbol: str, price: float):
-        """Update Chainlink price tracking. Returns True if new 5m bar started."""
-        now = time.time()
-        bar_start = get_current_5m_bar_ts(now)
-
-        symbol = symbol.lower()
-        self.last_prices[symbol] = price
-        self.chainlink_last_update_ts[symbol] = now  # track oracle freshness
-
-        # Check if new 5m bar
-        prior_bar = self.chainlink_bars.get(symbol)
-        if prior_bar == bar_start:
-            return False  # Same bar, no action needed
-
-        self.chainlink_bars[symbol] = bar_start
-
-        # First update ever - initialize 5m base
-        if prior_bar is None:
-            self.chainlink_5m_bases[symbol] = price
-            self.chainlink_5m_ts[symbol] = now
-            logger.debug(f"📥 update_from_chainlink | First {symbol} (bar {bar_start})")
-            return False
-
-        logger.debug(f"🕐 update_from_chainlink | New 5min bar {symbol} at {bar_start}")
-
-        # Global snapshot logging (once per bar across all symbols)
-        if bar_start != self.global_last_snapshot:
-            self.global_last_snapshot = bar_start
-            logger.debug("🔄 update_from_chainlink | Logging ALL assets snapshot")
-
-            for s in self.chainlink_5m_bases:
-                base = self.chainlink_5m_bases[s]
-                current_price = self.last_prices[s]
-
-                if base == 0.0:
-                    logger.debug(f"⏳ update_from_chainlink | {s.upper()}: {current_price:.4f} | FIRST")
-                else:
-                    change_pct = 100.0 * (current_price - base) / base
-                    direction = "🟢   UP" if change_pct > 0 else "🔴 DOWN" if change_pct < 0 else "⚪ FLAT"
-                    logger.info(
-                        f"🔄 update_from_chainlink | {direction} | {s.upper():>9} | {change_pct:+.3f}% | {current_price:10.4f} | {bar_start}"
-                    )
-                
-        # Set 5m base for this symbol (true bar open price)
-        self.chainlink_5m_bases[symbol] = price
-        self.chainlink_5m_ts[symbol] = now
-        
-        return True
-
-    async def listen_all(self):
-        _retry_count = 0
-        _disconnect_ts: Optional[float] = None
-        while True:
-            try:
-                async with websockets.connect(Config.WS_URL, ping_interval=20, ping_timeout=30) as ws:
-                    # Successful (re)connect — reset backoff state
-                    if _disconnect_ts is not None:
-                        down_secs = int(time.time() - _disconnect_ts)
-                        logger.info(f"✓ ChainlinkFeed | Reconnected after {down_secs}s down")
-                    _retry_count = 0
-                    _disconnect_ts = None
-
-                    await ws.send(json.dumps({
-                        "action": "subscribe",
-                        "subscriptions": [
-                            {
-                                "topic": Config.CHAINLINK_FEED,
-                                "type": "*",
-                                "filters": ""
-                            }
-                        ]
-                    }))
-                    logger.info(f"✓ ChainlinkFeed | Connected and subscribed to {Config.CHAINLINK_FEED} for {list(Config.CHAINLINK_SYMBOLS.keys())}")
-
-                    async for msg in ws:
-                        if not isinstance(msg, str):
-                            continue
-
-                        try:
-                            data = json.loads(msg)
-                        except json.JSONDecodeError:
-                            logger.debug(f"💬 ChainlinkFeed | Non-JSON/ws-control: {repr(msg)}")
-                            continue
-
-                        if data.get("topic") != Config.CHAINLINK_FEED:
-                            continue
-
-                        payload = data.get("payload")
-                        if not payload:
-                            continue
-
-                        symbol = payload.get("symbol")
-                        if not symbol or symbol not in Config.CHAINLINK_SYMBOLS:
-                            continue
-
-                        try:
-                            price = float(payload["value"])
-                        except (ValueError, TypeError):
-                            continue
-
-                        logger.debug(
-                            f"✓ ChainlinkFeed | {symbol.upper()}: {price:.4f} "
-                            f"@ {payload.get('timestamp', 'N/A')}"
-                        )
-
-                        self.update_from_chainlink(symbol, price)
-
-            except (websockets.ConnectionClosed, ConnectionResetError) as e:
-                if _disconnect_ts is None:
-                    _disconnect_ts = time.time()
-                _retry_count += 1
-                wait = min(3 * (2 ** (_retry_count - 1)), 60)
-                down_secs = int(time.time() - _disconnect_ts)
-                logger.warning(f"⚠️ ChainlinkFeed | Disconnected ({down_secs}s), retry #{_retry_count} in {wait}s: {e}")
-                if down_secs > 60:
-                    await send_alert(f"⚠️ <b>Chainlink feed down</b> for {down_secs}s\nRetry #{_retry_count} — signals may use only Bybit+Coinbase")
-                await asyncio.sleep(wait)
-            except Exception as e:
-                if _disconnect_ts is None:
-                    _disconnect_ts = time.time()
-                _retry_count += 1
-                wait = min(5 * (2 ** (_retry_count - 1)), 60)
-                logger.exception(f"✗ ChainlinkFeed | top-level error (retry #{_retry_count} in {wait}s): {e!r}")
-                await asyncio.sleep(wait)
-
 chainlink_feed = ChainlinkFeed()
+binance_feed = BinanceFeed()
 
 async def execute_trading_validation(symbol: str = None) -> Optional[Dict]:
     """Trading validation - single symbol for poll() efficiency."""
@@ -1588,7 +1256,6 @@ async def _retry_failed_redemptions() -> None:
     except Exception as e:
         logger.warning(f"✗ retry_redeem | scan failed: {e}")
 
-
 async def timer_loop():
     """Precise 5-minute scheduler with monotonic second-boundary wakeups."""
     logger.info("✓ Timer loop | Precise 5min scheduling")
@@ -1651,31 +1318,32 @@ async def getsignal(sym: str) -> Optional[Tuple[str, str, float, float, dict]]:
     return BYBIT_MANAGER.get_signal(sym)
 
 async def main():
-    global shutting_down, BYBIT_MANAGER, coinbase_feed, chainlink_feed
-    
+    global shutting_down, BYBIT_MANAGER, coinbase_feed, chainlink_feed, binance_feed
+
     # Early exits with cleanup
     if not geo_checker.test_geo():
         logger.warning("🌍 main | Geoblocked - monitoring only")
-    
+
     if not test_redis():
         logger.error("✗ main | Redis required")
-        return 
-        
+        return
+
     # Initialize ALL feeds FIRST (before starting)
     coinbase_feed = CoinbaseFeed()
     chainlink_feed = ChainlinkFeed()
-    
+    binance_feed = BinanceFeed()
+
     log_config()
-    checker.log_status()     
-    
+    checker.log_status()
+
     logger.info("🚀 main | Starting")
     await send_alert(f"<b>Restarted Bot</b>\n🚀 main | Starting")
-   
+
     # Clear orders + start background threads
     await order_mgr.clear_open_orders()
     await asyncio.to_thread(price_tracker.run, limit=5)
     await order_mgr.fast_approve("COLLATERAL")
-    
+
     # START feeds AFTER initialization
     coinbase_feed.start()
     chainlink_feed.start()
@@ -1686,6 +1354,11 @@ async def main():
     BYBIT_MANAGER = BybitManager()
     loop = asyncio.get_running_loop()
     BYBIT_MANAGER.start_websocket(loop)
+
+    # Wire BinanceFeed's trigger entry point to the same event loop the Bybit
+    # callbacks use. Late binding avoids a circular import in lib/binance_feed.
+    binance_feed.attach_validator(execute_trading_validation, loop)
+    binance_feed.start()
          
     sched_task = asyncio.create_task(timer_loop())
 
@@ -1721,6 +1394,9 @@ async def main():
         if chainlink_feed:
             chainlink_feed.stop()
             logger.info("✓ main | Chainlink feed stopped")
+        if binance_feed:
+            binance_feed.stop()
+            logger.info("✓ main | Binance feed stopped")
 
         # Final resource cleanup
         if 'rdb' in globals():

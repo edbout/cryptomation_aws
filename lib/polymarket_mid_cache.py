@@ -193,6 +193,20 @@ class PolymarketMidCache:
                 exc,
                 exc_info=True,
             )
+            # Transient HTTP/2 stream resets against the Polymarket CLOB are
+            # routine (status_code=None, "Request exception!"). The backoff loop
+            # auto-recovers, so don't dump the full ~50-frame httpx traceback
+            # for isolated blips — only log if it *persists*.
+            if errors < 3:
+                logger.debug(
+                    "PolymarketMidCache | poll error for …%s (×%d, backoff=%ss): %s",
+                    token_id[-8:], errors, backoff, exc,
+                )
+            elif errors == 3 or errors % 10 == 0:
+                logger.warning(
+                    "⚠️ PolymarketMidCache | poll error for …%s (×%d, backoff=%ss): %s",
+                    token_id[-8:], errors, backoff, exc,
+                )
 
     def _set(self, token_id: str, mid: float) -> None:
         if 0.0 < mid < 1.0:

@@ -108,8 +108,34 @@ class Config:
         "xrp/usd": 0.0,
         "sol/usd": 0.0,
     }
-    WS_URL = "wss://ws-live-data.polymarket.com"  
+    WS_URL = "wss://ws-live-data.polymarket.com"
     CHAINLINK_FEED = "crypto_prices_chainlink"
+
+    # ----------------------------------------------------------------------
+    # Binance Spot — additional trigger source (parallel to Bybit)
+    # ----------------------------------------------------------------------
+    BINANCE_ENABLED = os.getenv("BINANCE_ENABLED", "true").lower() == "true"
+
+    # Binance Spot symbols (USDT pairs — same string as ASSETS, conveniently)
+    BINANCE_SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT"]
+
+    # Above-average volume gate for Binance triggers.
+    # Mirrors the existing Bybit VolumeTracker pattern:
+    #   high_vol_minute = last_closed_1m_volume > mean(prev N 1m candles) * multiplier
+    BINANCE_VOL_MULTIPLIER = float(os.getenv("BINANCE_VOL_MULTIPLIER", "1.25"))
+    BINANCE_VOL_LOOKBACK   = int(os.getenv("BINANCE_VOL_LOOKBACK",   "10"))
+
+    # Per-symbol Binance trigger throttle (seconds). Mirrors Bybit _last_trigger_ts.
+    BINANCE_TRIGGER_THROTTLE_SEC = float(os.getenv("BINANCE_TRIGGER_THROTTLE_SEC", "5.0"))
+
+    # ----------------------------------------------------------------------
+    # Alignment gate: N-of-M direction agreement across trigger sources.
+    # Sources considered: {Bybit Futures, Binance Spot, Coinbase Futures}.
+    # Chainlink remains informational only (oracle is stale at ≤0.5% moves).
+    # ----------------------------------------------------------------------
+    ALIGNMENT_MIN_SOURCES = int(os.getenv("ALIGNMENT_MIN_SOURCES", "2"))   # 2-of-3
+    # Minimum |pct| for a source to count as an active vote (was hardcoded 0.03)
+    ALIGNMENT_MIN_PCT     = float(os.getenv("ALIGNMENT_MIN_PCT", "0.03"))
 
 class RedisCache:
     _instance = None

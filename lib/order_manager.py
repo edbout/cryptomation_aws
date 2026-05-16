@@ -1580,6 +1580,7 @@ class OrderManager:
                     self.tracker.record_signal_raw,
                     asset, token, order_price, confidence, trigger_minute, _candle_seconds_raw,
                     _c.get('bybit_dir', ''), _c.get('cb_dir', ''), _c.get('cl_dir', ''), _c.get('agree', ''),
+                    _c.get('binance_dir', ''),
                 )
             except Exception:
                 pass
