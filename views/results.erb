@@ -184,14 +184,14 @@
       <thead>
         <tr>
           <th>Time (UTC)</th><th>Asset</th><th>Side</th><th>Entry</th><th>Size</th>
-          <th colspan="3" style="text-align:center;border-left:1px solid #2a2a2a">WebSocket consensus</th>
+          <th colspan="4" style="text-align:center;border-left:1px solid #2a2a2a">WebSocket consensus</th>
           <th style="border-left:1px solid #2a2a2a">Agree</th>
           <th colspan="2" style="text-align:center;border-left:1px solid #2a2a2a">Polymarket (final)</th>
           <th>Result</th><th>Market</th>
         </tr>
         <tr>
           <th></th><th></th><th></th><th></th><th></th>
-          <th style="border-left:1px solid #2a2a2a">Bybit</th><th>CB</th><th>CL</th>
+          <th style="border-left:1px solid #2a2a2a">Bybit</th><th>BN</th><th>CB</th><th>CL</th>
           <th style="border-left:1px solid #2a2a2a"></th>
           <th style="border-left:1px solid #2a2a2a">Out</th><th>Δ%</th>
           <th></th><th></th>
@@ -214,6 +214,9 @@
           <%# WebSocket consensus %>
           <td class="<%= dir_cls(t[:bar_dir]) %>" style="border-left:1px solid #1e1e1e">
             <%= t[:bar_dir].empty? ? '—' : "#{t[:bar_dir]} #{t[:bar_pct] >= 0 ? '+' : ''}#{t[:bar_pct]}%" %>
+          </td>
+          <td class="<%= dir_cls(t[:bar_bn]) %>">
+            <% if t[:bar_bn].empty? %>—<% elsif t[:bar_bn_pct] %><%= t[:bar_bn] %> <%= t[:bar_bn_pct] >= 0 ? '+' : '' %><%= t[:bar_bn_pct] %>%<% else %><%= t[:bar_bn] %><% end %>
           </td>
           <td class="<%= dir_cls(t[:bar_cb]) %>">
             <% if t[:bar_cb].empty? %>—<% elsif t[:bar_cb_pct] %><%= t[:bar_cb] %> <%= t[:bar_cb_pct] >= 0 ? '+' : '' %><%= t[:bar_cb_pct] %>%<% else %><%= t[:bar_cb] %><% end %>

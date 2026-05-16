@@ -241,15 +241,17 @@ def load_trades
     raw_time   = (d['created_at'] || d['entry_time']).to_s
     entry_time = raw_time[0, 19].tr('T', ' ')
 
-    # WebSocket consensus (Bybit/Coinbase/Chainlink) — written at bar close
+    # WebSocket consensus (Bybit/Binance/Coinbase/Chainlink) — written at bar close
     bar_dir    = all['bar_direction'].to_s.upcase   # UP / DOWN
     bar_pct    = all['bar_pct'].to_f
+    bar_bn     = all['bar_binance'].to_s.upcase
+    bar_bn_pct = all['bar_bin_pct'].to_s.empty? ? nil : all['bar_bin_pct'].to_f
     bar_cb     = all['bar_coinbase'].to_s.upcase
     bar_cb_pct = all['bar_cb_pct'].to_s.empty? ? nil : all['bar_cb_pct'].to_f
     bar_cl     = all['bar_chainlink'].to_s.upcase
     bar_cl_pct = all['bar_cl_pct'].to_s.empty? ? nil : all['bar_cl_pct'].to_f
     bar_con  = all['bar_consensus'].to_s.upcase   # consensus direction
-    bar_agree = all['bar_agree'].to_s             # e.g. "2/3"
+    bar_agree = all['bar_agree'].to_s             # e.g. "3/4"
 
     # Polymarket final verdict (token resolution)
     pm_out    = all['polymarket_direction'].to_s.upcase
@@ -273,6 +275,8 @@ def load_trades
       market_slug: (all['market_slug'] || d['market_slug']).to_s,
       bar_dir:    bar_dir,
       bar_pct:    bar_pct,
+      bar_bn:     bar_bn,
+      bar_bn_pct: bar_bn_pct,
       bar_cb:     bar_cb,
       bar_cb_pct: bar_cb_pct,
       bar_cl:     bar_cl,
@@ -363,14 +367,25 @@ get '/stats' do
 
     parsed = entries.filter_map do |member, score|
       parts = member.to_s.split(':')
+      # Two record formats coexist:
+      #   - 10-field (legacy, pre-Binance): {minute}:{seconds}:{price}:{pct}:{token}:
+      #       {bybit_dir}:{cb_dir}:{cl_dir}:{agree}:{outcome}
+      #   - 11-field (current, with Binance): same + {binance_dir} inserted at index 6
+      #       → {bybit_dir}:{binance_dir}:{cb_dir}:{cl_dir}:{agree}:{outcome}
+      # Pick field offsets based on length so both render correctly.
       next unless parts.size >= 10
-      token   = parts[4]
-      outcome = parts[9]
+      if parts.size >= 11
+        bn_dir, cb_dir, cl_dir, agree, outcome = parts[6], parts[7], parts[8], parts[9], parts[10]
+      else
+        bn_dir = ''
+        cb_dir, cl_dir, agree, outcome        = parts[6], parts[7], parts[8], parts[9]
+      end
+      token = parts[4]
       win = outcome == 'na' ? nil : (token == 'YES' ? outcome == 'up' : outcome == 'down')
       { asset: asset, ts: score.to_f, candle_seconds: parts[1].to_f,
         pm_price: parts[2].to_f, bybit_pct: parts[3].to_f,
-        token: token, bybit_dir: parts[5], cb_dir: parts[6], cl_dir: parts[7],
-        agree: parts[8], outcome: outcome, win: win }
+        token: token, bybit_dir: parts[5], bn_dir: bn_dir, cb_dir: cb_dir, cl_dir: cl_dir,
+        agree: agree, outcome: outcome, win: win }
     end
 
     resolved = parsed.reject { |r| r[:outcome] == 'na' }
