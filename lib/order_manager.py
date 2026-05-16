@@ -1132,12 +1132,12 @@ class OrderManager:
                             "orderID": dry_order_id,
                             "status": "matched",
                             "makingAmount": str(round(size * order_price, 4)),  # USDC cost
-                            "takingAmount": str(round(size, 4)),                 # shares received
+                            "takingAmount": str(round(size, 4)),                # shares received
                         },
                     }
 
                 else:                  
-                    response = await self._execute_order(token_id, token, asset, size, order_price, open_price)
+                    response = await self._execute_order(token_id, token, asset, size, order_price)
                     logger.debug(f"✓ safe_place_order | Order response: {response}")
 
                 # Handle success
@@ -1178,9 +1178,8 @@ class OrderManager:
                     self.redis.hincrby(f"stats:trade:{asset}", "order_placed", 1)
                         
                     asyncio.create_task(_tg_alert_async(
-                        f"✅ {asset} | {token} | size ${size:.2f} "
-                        f"(win_rate={_win_rate:.1f}% price={order_price:.4f} conf={confidence:.4f}) "
-                        f"bankroll=${live_bankroll:.0f} | {market_slug})"
+                        f"✅ {{market_slug}} | {token} | size ${size:.2f} | win_rate {_win_rate:.1f}% | price {order_price:.4f} | "
+                        f"conf {confidence:.4f} | agree {consensus.get('agree', '')} | bankroll ${live_bankroll:.0f}"
                     ))
                     return response
 
@@ -1206,8 +1205,7 @@ class OrderManager:
         token: str,
         asset: Optional[str],
         size: float,
-        order_price: float,
-        open_price: float,
+        order_price: float
     ) -> Optional[Dict[str, Any]]:
         start_time = time.time()
         token_short = token[-8:]
@@ -1323,7 +1321,7 @@ class OrderManager:
                         f"${size:.2f}@{order_price:.3f} → {exec_time:.1f}s"
                     )
                     asyncio.create_task(_tg_alert_async(
-                        f"✅ exec_order {label} {asset} | {token_short} | "
+                        f"✅ BUY {token_short} {label} {asset} | "
                         f"${size:.2f}@{order_price:.3f} → {exec_time:.1f}s"
                     ))                    
                     did_succeed = True
@@ -2247,42 +2245,43 @@ class OrderManager:
                 # means the losing token collapses to ~0.01 with no exit possible.
                 seconds_to_expiry = 300 - get_seconds_since_5m_start(get_utc_now())
                 if seconds_to_expiry <= 35:
+                    emoji = "🟢" if pnl_pct > 0 else "🔴"
                     logger.info(
-                        f"⏰ Manage positions {asset} EXPIRY CLOSE | {seconds_to_expiry:.0f}s to bar end | "
-                        f"pnl={pnl_pct:+.1f}% | Closing {market_slug} before resolution"
+                        f"{emoji} Manage positions {asset} EXPIRY CLOSE | {seconds_to_expiry:.0f}s to bar end | "
+                        f"pnl={pnl_pct:.1f}% | Closing {market_slug} before resolution"
                     )
                     self.redis.hincrby(f"stats:trade:{asset}", "expiry_close", 1)
                     if pnl_pct > 0:
                         self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="expiry")
+
                     asyncio.create_task(_tg_alert_async(
-                        f"⏰ Manage positions {asset} EXPIRY CLOSE | {seconds_to_expiry:.0f}s to bar end | "
-                        f"pnl={pnl_pct:+.1f}% | Closing {market_slug} before resolution"))
+                        f"{emoji} Manage positions {asset} | closure before resolution | "
+                        f"{seconds_to_expiry:.0f}s to bar end | pnl {pnl_pct:.1f}%"
+                    ))
                     return
 
                 elif current_price >= tp_price_target:
-                    logger.info(f"🟢 Manage positions {asset} TP HIT price={current_price:.3f} >= {tp_price_target:.3f} | Closing {market_slug}")
+                    logger.info(f"🟢 Manage positions {asset} TP HIT | pnl {pnl_pct:.1f}% | price {current_price:.3f} >= {tp_price_target:.3f}")
                     self.redis.hincrby(f"stats:trade:{asset}", "tp", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="tp")
-                    asyncio.create_task(_tg_alert_async(f"🟢 Manage positions {asset} TP HIT price={current_price:.3f} >= {tp_price_target:.3f} | Closing {market_slug}"))
+                    asyncio.create_task(_tg_alert_async(f"🟢 Manage positions {asset} TP HIT | pnl {pnl_pct:.1f}% | price {current_price:.3f} >= {tp_price_target:.3f}"))
                     return
 
                 elif pnl_pct <= -sl_pct:
-                    logger.info(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (≤ -{sl_pct:.1f}%) | Closing {market_slug}")
+                    logger.info(f"🔴 Manage positions {asset} SL HIT | {pnl_pct:.1f}% <= -{sl_pct:.1f}%")
                     self.redis.hincrby(f"stats:trade:{asset}", "sl", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="sl")
-                    asyncio.create_task(_tg_alert_async(f"🔴 Manage positions {asset} SL HIT {pnl_pct:.1f}% (≤ -{sl_pct:.1f}%) | Closing {market_slug}"))
+                    asyncio.create_task(_tg_alert_async(f"🔴 Manage positions {asset} SL HIT | pnl {pnl_pct:.1f}% <= -{sl_pct:.1f}%"))
                     return
 
                 elif max_pnl_pct > 15 and pnl_pct <= trailing_stop_pct:
-                    logger.info(
-                        f"🟠 Manage positions {asset} TRAIL HIT pnl={pnl_pct:.1f}% peak={max_pnl_pct:.1f}% stop={trailing_stop_pct:.1f}% | Closing {market_slug}"
-                    )
+                    logger.info(f"🟠 Manage positions {asset} TRAIL HIT pnl={pnl_pct:.1f}% | peak {max_pnl_pct:.1f}% | pnl {pnl_pct:.1f}% <= stop {trailing_stop_pct:.1f}%")
                     self.redis.hincrby(f"stats:trade:{asset}", "trail_stop", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="trail")
-                    asyncio.create_task(_tg_alert_async(f"🟠 Manage positions {asset} TRAIL HIT pnl={pnl_pct:.1f}% peak={max_pnl_pct:.1f}% stop={trailing_stop_pct:.1f}% | Closing {market_slug}"))
+                    asyncio.create_task(_tg_alert_async(f"🟠 Manage positions {asset} TRAIL HIT | peak {max_pnl_pct:.1f}% | pnl {pnl_pct:.1f}% <= stop {trailing_stop_pct:.1f}%"))
                     return
 
         except Exception as e:
