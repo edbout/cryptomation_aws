@@ -28,7 +28,6 @@ except ImportError:
 from config import RedisCache, Config
 from lib.rpc_utils import RPCManager
 from lib.polymarket_positions import PolymarketPositionManager
-from lib.telegram_alert import send_alert_sync as _tg_alert
 from lib.usdce_wrapper import wrap_usdce_to_pusd
 
 @dataclass
@@ -313,9 +312,7 @@ class PolymarketRedeemer:
             rdb.setex(f"redeem:retry:{position.condition_id}", 600, retry_payload)
         except Exception as ex:
             logger.warning(f"redeem_high_gas | [RETRY QUEUE] Redis write failed: {ex}")
-        msg = f"🚨 <b>Redemption failed</b> after 3 attempts\ncondition_id: <code>{position.condition_id}</code>\nValue: ${position.value:.2f} — queued for retry in 10min"
-        logger.error(f"redeem_high_gas | [FAILED] alerting & queuing retry for {position.condition_id}")
-        _tg_alert(msg)
+        logger.error(f"🚨 redeem_high_gas | [FAILED] alerting & queuing retry for {position.condition_id}")
         return False
     
     def redeem_gasless(self, position: RedeemPosition) -> bool:

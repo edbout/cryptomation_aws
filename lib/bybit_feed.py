@@ -32,7 +32,6 @@ import json
 import logging
 import threading
 import time
-import time as timemodule  # preserved alias used by original code
 from collections import deque
 from datetime import datetime
 from decimal import Decimal
@@ -419,7 +418,7 @@ class BybitFeed:
                 if len(token_list) >= 2:
                     new_cache[asset] = (token_list[0], token_list[1])
             self._token_cache = new_cache
-            self._token_cache_ts = timemodule.time()
+            self._token_cache_ts = time.time()
             logger.info(
                 f"✓ _refresh_token_cache | {len(new_cache)} assets cached: {list(new_cache.keys())}"
             )
@@ -487,7 +486,7 @@ class BybitFeed:
             events = msg.get("data", [])
             if isinstance(events, dict):
                 events = [events]
-            ts = timemodule.time()
+            ts = time.time()
             for event in events:
                 linear_sym = event.get("symbol", "")
                 sym = linear_sym[:-1] if linear_sym.endswith("USDT") else linear_sym
@@ -528,7 +527,7 @@ class BybitFeed:
             if price <= 0:
                 return
 
-            now_ts = timemodule.time()
+            now_ts = time.time()
 
             if now_ts - self._last_ticker_ts[sym] < 1.0:
                 return
@@ -732,7 +731,7 @@ class BybitFeed:
                 boost += 0.15
                 logger.debug(f"⚡ kelly_boost | {sym} align   funding={funding:+.5f} direction={direction} +0.15")
 
-        now_ts = timemodule.time()
+        now_ts = time.time()
         cutoff = now_ts - 30.0
         events = self._liq_events.get(sym, deque())
         while events and events[0][0] < cutoff:
@@ -788,10 +787,10 @@ class BybitFeed:
     def _cache_refresh_loop(self) -> None:
         """Keep the token cache fresh. WebSocket callbacks handle all market data."""
         while self.running:
-            timemodule.sleep(60)
+            time.sleep(60)
             if not self.running:
                 break
-            now_ts = timemodule.time()
+            now_ts = time.time()
             if now_ts - self._token_cache_ts > self._TOKEN_CACHE_TTL:
                 self._refresh_token_cache()
 

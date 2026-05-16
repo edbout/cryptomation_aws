@@ -4,7 +4,7 @@
 import asyncio
 import logging
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,9 @@ class PolymarketMidCache:
         self._polls: int = 0
         self._errors_by_token: Dict[str, int] = defaultdict(int)
         self._next_poll_at: Dict[str, float] = {}
+        # Rolling window of absolute 1-second % changes per token (last 60 readings).
+        # Used by order_manager to compute per-token volatility for SL scaling.
+        self._price_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=60))
         # Serialises concurrent asyncio.to_thread CLOB calls: httpx.Client is not
         # thread-safe, so running multiple get_midpoint calls simultaneously causes
         # "deque mutated during iteration" errors inside httpx's connection pool.
@@ -208,10 +211,31 @@ class PolymarketMidCache:
                     token_id[-8:], errors, backoff, exc,
                 )
 
+    def get_volatility(self, token_id: str, min_samples: int = 10) -> Optional[float]:
+        """Return the rolling std-dev of 1-second mid-price % changes for a token.
+
+        Uses the last 60 polled readings (≈60 seconds of data at 1 Hz).
+        Returns None when fewer than min_samples points are available — callers
+        should fall back to the static SL base in that case.
+        """
+        history = self._price_history.get(token_id)
+        if not history or len(history) < min_samples:
+            return None
+        samples = list(history)
+        n = len(samples)
+        mean = sum(samples) / n
+        variance = sum((x - mean) ** 2 for x in samples) / n
+        return variance ** 0.5
+
     def _set(self, token_id: str, mid: float) -> None:
         if 0.0 < mid < 1.0:
+            prev = self._prices.get(token_id)
             self._prices[token_id] = mid
             self._ts[token_id] = time.time()
+            # Record absolute % change from the previous reading for volatility tracking.
+            if prev is not None and prev > 0:
+                pct_change = abs((mid - prev) / prev) * 100
+                self._price_history[token_id].append(pct_change)
 
 
 POLY_MID_CACHE = PolymarketMidCache()

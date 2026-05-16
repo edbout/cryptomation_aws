@@ -18,7 +18,7 @@ from price_tracker import PriceTracker
 from lib.polymarket_mid_cache import POLY_MID_CACHE
 from lib.polymarket_positions import PolymarketPositionManager
 from lib.helpers import safe_float, get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts
-from lib.telegram_alert import send_alert as _tg_alert_async, send_alert_sync as _tg_alert
+from lib.telegram_alert import send_alert as _tg_alert_async
 
 UTC = ZoneInfo("UTC")
 
@@ -862,6 +862,90 @@ class OrderManager:
             logger.warning(f"_check_clob_liquidity | {asset} check error (passing through): {e}")
             return True, "check_error_passthrough", mid_price
 
+    async def _fak_depth_check(
+        self,
+        token_id: str,
+        asset: str,
+        target_price: float,
+        size: float,
+    ) -> tuple[bool, bool]:
+        """Live ask-side depth check immediately before a FAK escalation.
+
+        Fetches the current CLOB book and sums USD available at or below
+        target_price.  Returns (has_liquidity, should_abort).
+
+        should_abort is True when fillable depth is below MIN_FAK_FILL_FRACTION
+        of the order size — at that point the FAK would return "no orders found"
+        anyway, so we save the round-trip and log a diagnostic book snapshot
+        instead.  Fails open on any API error so a transient hiccup never blocks
+        trading.
+        """
+        # Minimum fraction of the order that must be fillable to justify the FAK.
+        # Below 25% the fill is too small to be worth the API cost.
+        MIN_FAK_FILL_FRACTION = 0.25
+
+        try:
+            book = await asyncio.to_thread(self.client.get_order_book, token_id)
+
+            def _field(obj, key):
+                return obj[key] if isinstance(obj, dict) else getattr(obj, key, None)
+
+            def _price(level):
+                return float(level["price"] if isinstance(level, dict) else level.price)
+
+            def _size(level):
+                v = level.get("size", 0) if isinstance(level, dict) else getattr(level, "size", 0)
+                return float(v)
+
+            asks = _field(book, "asks") if book else None
+            bids = _field(book, "bids") if book else None
+
+            best_bid = (
+                _price(sorted(bids, key=_price, reverse=True)[0]) if bids else 0.0
+            )
+
+            if not asks:
+                logger.warning(
+                    f"📭 fak_depth_check {asset} | EMPTY ask side | "
+                    f"target={target_price:.4f} best_bid={best_bid:.4f} size=${size:.2f} — aborting FAK"
+                )
+                return False, True
+
+            asks_sorted = sorted(asks, key=_price)
+            best_ask = _price(asks_sorted[0])
+
+            # USD value of resting asks at or below our target price
+            fillable_usd = sum(
+                _price(lvl) * _size(lvl)
+                for lvl in asks_sorted
+                if _price(lvl) <= target_price and _size(lvl) > 0
+            )
+
+            if fillable_usd < size * MIN_FAK_FILL_FRACTION:
+                top_asks = [
+                    (f"{_price(l):.4f}", f"${_price(l) * _size(l):.2f}")
+                    for l in asks_sorted[:5]
+                ]
+                logger.warning(
+                    f"📭 fak_depth_check {asset} | thin asks at target={target_price:.4f} | "
+                    f"fillable=${fillable_usd:.2f} of ${size:.2f} needed "
+                    f"(min {MIN_FAK_FILL_FRACTION:.0%}) | "
+                    f"best_ask={best_ask:.4f} best_bid={best_bid:.4f} | "
+                    f"top 5 asks (price, usd): {top_asks} — aborting FAK"
+                )
+                return False, True
+
+            logger.debug(
+                f"✓ fak_depth_check {asset} | ok at target={target_price:.4f} | "
+                f"fillable=${fillable_usd:.2f} best_ask={best_ask:.4f}"
+            )
+            return True, False
+
+        except Exception as e:
+            # Fail open — a depth-check error must not silently kill trading
+            logger.debug(f"fak_depth_check {asset} | check error (proceeding): {e}")
+            return True, False
+
     def _calc_kelly_size(self, win_rate_pct: float, order_price: float, kelly_boost: float = 1.0, bankroll: float = None) -> float:
         """Fractional Kelly position sizing for binary Polymarket outcomes.
 
@@ -992,12 +1076,8 @@ class OrderManager:
                     token_id, asset, Config.POSITION_SIZE, price
                 )
                 if not clob_ok:
-                    logger.info(f"✗ safe_place_order | CLOB rejected {asset} {token}: {clob_reason}")
+                    logger.warning(f"✗ safe_place_order | CLOB rejected {asset} {token}: {clob_reason}")
                     self.redis.hincrby(f"stats:trade:{asset}", "clob_fail", 1)
-                    asyncio.create_task(_tg_alert_async(
-                        f"⚠️ <b>Signal dropped — CLOB rejected</b>\n"
-                        f"Asset: {asset} ({token})\nReason: {clob_reason}"
-                    ))
                     return None
                 logger.debug(f"✓ safe_place_order | CLOB ok {asset} {token}: {clob_reason}")
 
@@ -1300,6 +1380,29 @@ class OrderManager:
                 last_error = error_msg  # preserve across iterations for final log
 
             if did_retry and attempt < max_retries - 1:
+                # Before escalating to a FAK tier, verify there is resting ask-side
+                # liquidity at the next attempt price.  If the book is empty or too
+                # thin the FAK will return "no orders found" immediately — we abort
+                # early and emit a diagnostic book snapshot instead of wasting the
+                # API round-trip.
+                _next_label, _next_type, _next_slip = OPEN_ATTEMPTS[attempt + 1]
+                if _next_type == OrderType.FAK:
+                    _next_price = max(Config.PRICE_MIN, min(
+                        round(base_price * (1 + _next_slip), 2), Config.PRICE_MAX
+                    ))
+                    _liq_ok, _abort = await self._fak_depth_check(
+                        token_id, asset, _next_price, size
+                    )
+                    if _abort:
+                        last_error = (
+                            f"no ask-side liquidity at {_next_price:.4f} "
+                            f"(pre-FAK depth check, tier {attempt+2})"
+                        )
+                        logger.error(
+                            f"✗ exec_order {asset} | aborting before tier "
+                            f"{attempt+2}/{max_retries} FAK — {last_error}"
+                        )
+                        break  # skip remaining tiers; falls to "All tiers exhausted"
                 logger.info(
                     f"⏳ exec_order {asset} | escalating to tier {attempt+2}/{max_retries} after {label} fail"
                 )
@@ -1885,8 +1988,13 @@ class OrderManager:
         # Keys: dryrun:trade:{order_id}  (hash, 7d TTL)
         #       dryrun:daily:{YYYY-MM-DD} (sorted set of order_ids, 14d TTL)
         if Config.DRY_RUN:
-            tp_price_track = round(float(price) + (1.0 - float(price)) * 0.50, 4)
-            sl_pct_track   = min(trigger_minute * 3 + 10, 22)
+            tp_price_track  = round(float(price) + (1.0 - float(price)) * 0.50, 4)
+            _sl_base_track  = min(trigger_minute * 3 + 10, 22)
+            _vol_track      = POLY_MID_CACHE.get_volatility(token_id)
+            sl_pct_track    = (
+                min(round(_sl_base_track * max(1.0, _vol_track / 0.30), 1), 35.0)
+                if _vol_track is not None else float(_sl_base_track)
+            )
             dry_key = f"dryrun:trade:{order_id}"
             today   = datetime.now(UTC).strftime("%Y-%m-%d")
             try:
@@ -2062,8 +2170,22 @@ class OrderManager:
 
                 # TP: capture 50% of remaining distance to 1.0 — avoids impossible %-of-entry targets for high-price entries
                 tp_price_target = min(entry_price + (1.0 - entry_price) * 0.50, 0.97)
-                # SL: absolute % loss, grows slightly deeper into candle (10–22%)
-                sl_pct = min(trigger_minute * 3 + 10, 22)
+                # SL: base grows with trigger minute (10–22%).  Scaled upward when the
+                # market is choppy so normal noise doesn't fire the stop prematurely.
+                # Baseline: 0.30% per-second mid change in calm conditions.
+                # Example: vol=0.60% → scale=2.0 → a M2 base-16% stop widens to 32%.
+                # Hard cap at 35% to bound worst-case loss regardless of vol reading.
+                _sl_base = min(trigger_minute * 3 + 10, 22)
+                _vol = POLY_MID_CACHE.get_volatility(token_id)
+                if _vol is not None:
+                    _vol_scale = max(1.0, _vol / 0.30)
+                    sl_pct = min(round(_sl_base * _vol_scale, 1), 35.0)
+                    logger.debug(
+                        f"📐 SL vol-adjust {asset} | vol={_vol:.3f}% scale={_vol_scale:.2f}x "
+                        f"base={_sl_base}% → sl={sl_pct}%"
+                    )
+                else:
+                    sl_pct = float(_sl_base)
 
                 # Trailing stop logic
                 max_key = f"max_pnl:{token_id}"
@@ -2143,7 +2265,7 @@ class OrderManager:
                     self.redis.hincrby(f"stats:trade:{asset}", "tp", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="tp")
-                    asyncio.create_task(_tg_alert_async(f"🟢 Manage positions {asset} TP HIT price={current_price:.3f} >= {tp_price_target:.3f} | Closing {market_slug}" ))
+                    asyncio.create_task(_tg_alert_async(f"🟢 Manage positions {asset} TP HIT price={current_price:.3f} >= {tp_price_target:.3f} | Closing {market_slug}"))
                     return
 
                 elif pnl_pct <= -sl_pct:
@@ -2179,6 +2301,6 @@ class OrderManager:
 
         except Exception as e:
             logger.error(f"✗ close_with_cleanup {asset} | Close failed | {e}")
-        
+
         finally:
             pass

@@ -21,7 +21,7 @@ Wiring
 from __future__ import annotations
 
 import logging
-import time as timemodule
+import time
 from typing import Any, Optional, Tuple
 
 from config import Config
@@ -92,7 +92,7 @@ class BybitManager:
         else:
             chainlink_pct = 0.0
 
-        now_ts_sig = timemodule.time()
+        now_ts_sig = time.time()
         chainlink_age = now_ts_sig - self.chainlink_feed.chainlink_last_update_ts.get(chainlink_sym, 0.0)
 
         coinbase_current = self.coinbase_feed.last_prices.get(coinbase_sym, 0.0)
@@ -158,7 +158,7 @@ class BybitManager:
         btc_lag = (
             sym != "BTCUSD"
             and feed._btc_momentum_direction is not None
-            and (timemodule.time() - feed._btc_momentum_ts) < Config.BTC_LAG_TTL
+            and (time.time() - feed._btc_momentum_ts) < Config.BTC_LAG_TTL
             and ((bybit_5m_pct > 0) == (feed._btc_momentum_direction == "UP"))
         )
         in_epoch_bias = tick.candle_seconds <= Config.EPOCH_BIAS_SECS

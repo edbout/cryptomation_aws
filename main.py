@@ -4,7 +4,6 @@
 import asyncio
 import math
 import signal
-import websockets
 import json
 import logging
 import os
@@ -12,13 +11,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Optional, List, Tuple, Any
 from logging.handlers import TimedRotatingFileHandler
-from decimal import Decimal
-from collections import deque
 from dataclasses import dataclass
-from pybit.unified_trading import WebSocket
-import threading
 import time
-import time as timemodule
 
 UTC = ZoneInfo("UTC")
 
@@ -64,7 +58,7 @@ logging.getLogger("py_clob_client_v2.http_helpers.helpers").setLevel(logging.CRI
 from config import Config, RedisCache
 from components import Components
 from redeem import run_redeem_non_interactive
-from lib.helpers import  get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts, normalize_asset
+from lib.helpers import  get_utc_now, normalize_asset
 from lib.telegram_alert import send_alert
 from lib.polymarket_mid_cache import POLY_MID_CACHE
 from lib.binance_feed import BinanceFeed
@@ -550,4 +544,4 @@ if __name__ == "__main__":
     except Exception as e:         
         logger.error(f"💥 main | Crashed: {e}", exc_info=True)
     finally:
-        logger.info("✓ main | Shutdown complete")
+        logger.info("✓ main | Shutdown complete")
