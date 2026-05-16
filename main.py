@@ -71,8 +71,10 @@ from lib.binance_feed import BinanceFeed
 from lib.coinbase_feed import CoinbaseFeed
 from lib.chainlink_feed import ChainlinkFeed
 from lib.bybit_manager import BybitManager
+from lib.bybit_feed import BybitFeed
 
 BYBIT_MANAGER: Optional[BybitManager] = None
+BYBIT_FEED: Optional[BybitFeed] = None
 
 shutting_down = False
 
@@ -204,7 +206,7 @@ async def _execute_parallel_trades(
             token = "NO"
             logger.info("🚀 execute_parallel_trades | BUYING NO for %s (open: %.2f)", asset, sig_open)
 
-        kelly_boost = BYBIT_MANAGER.get_kelly_boost(asset, direction) if BYBIT_MANAGER else 1.0
+        kelly_boost = BYBIT_FEED.get_kelly_boost(asset, direction) if BYBIT_FEED else 1.0
 
         tasks.append(_trade_with_semaphore(
             asset, direction, confidence, sig_open, market_slug, token_id, token, kelly_boost,
@@ -404,8 +406,8 @@ async def timer_loop():
                 logger.debug(f"✓ Timer loop | Balance check: can_trade={APP_STATE.can_trade}")
 
                 for sym in Config.BYBIT_SYMBOLS:
-                    if BYBIT_MANAGER and sym in BYBIT_MANAGER.bybit_candles:
-                        BYBIT_MANAGER.bybit_candles[sym].log_volume_status(sym)
+                    if BYBIT_FEED and sym in BYBIT_FEED.bybit_candles:
+                        BYBIT_FEED.bybit_candles[sym].log_volume_status(sym)
 
                 await asyncio.to_thread(price_tracker.run, limit=5)
                 continue
@@ -440,7 +442,7 @@ async def getsignal(sym: str) -> Optional[Tuple[str, str, float, float, dict]]:
     return BYBIT_MANAGER.get_signal(sym)
 
 async def main():
-    global shutting_down, BYBIT_MANAGER, coinbase_feed, chainlink_feed, binance_feed
+    global shutting_down, BYBIT_MANAGER, BYBIT_FEED, coinbase_feed, chainlink_feed, binance_feed
 
     # Early exits with cleanup
     if not geo_checker.test_geo():
@@ -473,18 +475,21 @@ async def main():
     asyncio.create_task(POLY_MID_CACHE.run())
     logger.info("✓ main | PolymarketMidCache started")
 
-    BYBIT_MANAGER = BybitManager(
+    loop = asyncio.get_running_loop()
+    BYBIT_FEED = BybitFeed(
         chainlink_feed=chainlink_feed,
         coinbase_feed=coinbase_feed,
         binance_feed=binance_feed,
     )
-    BYBIT_MANAGER.attach_components(
-        rdb=rdb, finder=finder, client=client, price_tracker=price_tracker,
+    BYBIT_FEED.attach_components(
+        finder=finder, client=client, price_tracker=price_tracker,
     )
-    # Late-bound to avoid a circular import in lib/bybit_manager.
-    BYBIT_MANAGER.attach_validator(execute_trading_validation)
-    loop = asyncio.get_running_loop()
-    BYBIT_MANAGER.start_websocket(loop)
+    # Late-bound to avoid a circular import in lib/bybit_feed.
+    BYBIT_FEED.attach_validator(execute_trading_validation, loop)
+    BYBIT_FEED.start_websocket(loop)
+
+    BYBIT_MANAGER = BybitManager(bybit_feed=BYBIT_FEED)
+    BYBIT_MANAGER.attach_rdb(rdb)
 
     # Wire BinanceFeed's trigger entry point to the same event loop the Bybit
     # callbacks use. Late binding avoids a circular import in lib/binance_feed.
@@ -513,10 +518,11 @@ async def main():
         logger.info("🔄 main | Shutting down...")
         
         # Sequential cleanup (Bybit first, then feeds)
-        if BYBIT_MANAGER:
-            BYBIT_MANAGER.stop()
+        if BYBIT_FEED:
+            BYBIT_FEED.stop()
             logger.info("✓ main | Bybit feed stopped")
-            BYBIT_MANAGER = None  # Clear global
+            BYBIT_FEED = None  # Clear global
+            BYBIT_MANAGER = None
 
         # Stop feeds (they have their own task.cancel())
         if coinbase_feed:
