@@ -1,11 +1,8 @@
-#import time
 import json
 from typing import List, Dict, Any, Optional, Tuple
-#from datetime import datetime, UTC
 from statistics import mean, stdev
 from collections import defaultdict
 import logging
-#from functools import lru_cache
 from dataclasses import dataclass
 from lib.helpers import normalize_asset, get_utc_now, get_seconds_since_5m_start
 from config import RedisCache, Config

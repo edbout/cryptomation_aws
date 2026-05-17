@@ -35,7 +35,7 @@ import time
 from collections import deque
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from pybit.unified_trading import WebSocket
@@ -427,6 +427,40 @@ class BybitFeed:
         except Exception as e:
             logger.warning(f"⚠️ _refresh_token_cache | Failed: {e}")
 
+    def _refresh_active_tokens(self) -> None:
+        """Tell PolymarketMidCache which YES/NO tokens are 'active' based on
+        the current Bybit direction per asset. The cache polls active tokens
+        at full cadence and inactive tokens at the slower watch cadence
+        (Config.POLY_POLL_INTERVAL_WATCH).
+
+        Mapping per asset:
+          candle_5m_pct > 0   → YES is active (we'd buy YES on UP)
+          candle_5m_pct < 0   → NO  is active
+          candle_5m_pct == 0  → both active (conservative — flat / no signal)
+          no tick data        → both active (cold start)
+
+        Called from _on_ticker after the new tick has been written to
+        self.data[sym]. Safe to call from the pybit WS daemon thread:
+        set_active_tokens() does a single bare assignment which is GIL-atomic.
+        """
+        active: List[str] = []
+        for sym in Config.BYBIT_SYMBOLS:
+            asset_key = normalize_asset(sym)
+            tokens = self._token_cache.get(asset_key)
+            if tokens is None:
+                continue
+            yes_id, no_id = tokens
+            tick = self.data.get(sym)
+            if tick is None or tick.candle_5m_pct == 0:
+                # No data or genuinely flat — keep both sides warm so a
+                # direction flip doesn't blackout the 60s volatility window
+                # for whichever side is suddenly active.
+                active.append(yes_id)
+                active.append(no_id)
+                continue
+            active.append(yes_id if tick.candle_5m_pct > 0 else no_id)
+        POLY_MID_CACHE.set_active_tokens(active)
+
     # ── WebSocket callbacks ──────────────────────────────────────────────────────
     def _on_orderbook(self, msg: Dict) -> None:
         """Handle Bybit orderbook.5 WebSocket messages (snapshot + delta).
@@ -588,6 +622,10 @@ class BybitFeed:
                 high_volume=high_vol, order_book_imbalance=obi,
                 candle_seconds=candle_seconds,
             )
+            # Inform the Polymarket mid cache which token sides are currently
+            # "active" so it can poll the inactive side at a slower cadence.
+            # Cheap (O(num_assets) dict lookups) and idempotent — safe on every tick.
+            self._refresh_active_tokens()
 
             btc_lag = (
                 sym != "BTCUSD"

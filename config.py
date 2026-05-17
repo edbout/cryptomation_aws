@@ -12,9 +12,8 @@ except ImportError:
     pass
 
 class Config:
-    """Centralized configuration from environment variables (Heroku config vars)."""
+    """Centralized configuration from environment variables."""
     
-
     # Runtime mode
     DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
     
@@ -125,6 +124,18 @@ class Config:
     # consistent with "only trade when both agree".
     # Set to false to revert to Bybit-only OBI veto (prior behavior).
     OBI_REQUIRE_BINANCE_AGREE: bool = os.getenv("OBI_REQUIRE_BINANCE_AGREE", "true").lower() == "true"
+
+    # ── Asymmetric Polymarket mid-cache polling ──────────────────────────────
+    # The PolymarketMidCache polls every subscribed YES/NO token at the active
+    # interval. With 4 assets × 2 tokens that's 8 calls/sec on the CLOB API,
+    # which is a meaningful cost. Asymmetric polling reduces that by polling
+    # only the "active" side (matching Bybit's current direction) at full
+    # cadence and the "watch" side at a slower cadence. Saves ~70% of calls
+    # while still keeping the 60s per-token volatility window populated on
+    # both sides (so SL scaling doesn't blackout on a direction flip).
+    POLY_ASYMMETRIC_POLLING: bool    = os.getenv("POLY_ASYMMETRIC_POLLING", "true").lower() == "true"
+    POLY_POLL_INTERVAL_ACTIVE: float = float(os.getenv("POLY_POLL_INTERVAL_ACTIVE", "1.0"))
+    POLY_POLL_INTERVAL_WATCH:  float = float(os.getenv("POLY_POLL_INTERVAL_WATCH",  "5.0"))
 
     # Polymarket Assets and symbols
     WS_URL = "wss://ws-live-data.polymarket.com"

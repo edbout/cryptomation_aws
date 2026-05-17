@@ -5,10 +5,15 @@ import asyncio
 import logging
 import time
 from collections import defaultdict, deque
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
+
+from config import Config
 
 logger = logging.getLogger(__name__)
 
+# Legacy single-cadence default. When Config.POLY_ASYMMETRIC_POLLING is false
+# (or no active set has been provided), every token is polled at this rate —
+# preserving the original behavior exactly.
 POLL_INTERVAL: float = 1.0
 STALE_SECS: float = 3.0
 MAX_BACKOFF_SECS: float = 30.0
@@ -48,6 +53,11 @@ class PolymarketMidCache:
         # "deque mutated during iteration" errors inside httpx's connection pool.
         # Initialised lazily in run() so it is always bound to the running event loop.
         self._fetch_sem: Optional[asyncio.Semaphore] = None
+        # Tokens currently considered "active" for asymmetric polling. Empty set
+        # is treated as "all active" — a safe default for cold start before
+        # the caller (BybitFeed) has determined direction. Populated by
+        # set_active_tokens(); read in _cadence_for().
+        self._active_tokens: Set[str] = set()
 
     def set_client(self, client: Any) -> None:
         """Inject the ClobClient. Must be called before run()."""
@@ -55,9 +65,21 @@ class PolymarketMidCache:
         logger.info("✓ PolymarketMidCache | client set")
 
     def get(self, token_id: str) -> Optional[float]:
-        """Return a fresh cached mid, or None (caller falls back to HTTP)."""
+        """Return a fresh cached mid, or None (caller falls back to HTTP).
+
+        Staleness threshold scales with the token's polling cadence: active
+        tokens stay strict at STALE_SECS, watch tokens get cadence × 1.5 so
+        their normal poll gaps don't look "stale" to callers. Without this,
+        watch tokens would be marked stale ~40% of the time even when the
+        cache is healthy — driving needless HTTP fallback for the
+        near-resolved gate during downtrends.
+        """
         ts = self._ts.get(token_id)
-        if ts is None or (time.time() - ts) > STALE_SECS:
+        if ts is None:
+            self._miss += 1
+            return None
+        threshold = max(STALE_SECS, self._cadence_for(token_id) * 1.5)
+        if (time.time() - ts) > threshold:
             self._miss += 1
             return None
         self._hit += 1
@@ -70,16 +92,56 @@ class PolymarketMidCache:
             self._pending.update(new)
             logger.debug("PolymarketMidCache | queued %d new token(s) for polling", len(new))
 
+    def set_active_tokens(self, token_ids: Iterable[str]) -> None:
+        """Mark which subscribed token IDs should poll at the active cadence.
+
+        Tokens NOT in this set are polled at the slower 'watch' cadence
+        (Config.POLY_POLL_INTERVAL_WATCH). Passing an empty iterable resets
+        to 'all active' — a safe degradation that callers can use when they
+        don't yet know which side is currently relevant (e.g. Bybit feed
+        cold start, market data gaps).
+
+        Replaces the previous set atomically. Safe to call from any thread
+        because a bare assignment is GIL-atomic for set references.
+        """
+        self._active_tokens = set(token_ids)
+
+    def _cadence_for(self, token_id: str) -> float:
+        """Return the seconds-to-next-poll cadence for `token_id`.
+
+        Falls back to the legacy single cadence when asymmetric polling is
+        disabled OR when no active set has been provided yet (cold start).
+        Both are safe degradations — they reduce to the prior behavior.
+        """
+        if not Config.POLY_ASYMMETRIC_POLLING:
+            return POLL_INTERVAL
+        if not self._active_tokens:
+            return Config.POLY_POLL_INTERVAL_ACTIVE
+        if token_id in self._active_tokens:
+            return Config.POLY_POLL_INTERVAL_ACTIVE
+        return Config.POLY_POLL_INTERVAL_WATCH
+
     def stats(self) -> str:
         total = self._hit + self._miss
         hit_rate = 100 * self._hit / total if total else 0
+        # Active / watch counts (only meaningful when asymmetric polling is on).
+        active_n = len(self._subscribed & self._active_tokens) if self._active_tokens else len(self._subscribed)
+        watch_n  = len(self._subscribed) - active_n
         return (
             f"hits={self._hit} misses={self._miss} "
-            f"hit_rate={hit_rate:.0f}% cached_tokens={len(self._prices)} polls={self._polls}"
+            f"hit_rate={hit_rate:.0f}% cached_tokens={len(self._prices)} "
+            f"polls={self._polls} active={active_n} watch={watch_n}"
         )
 
     async def run(self) -> None:
-        """Poll get_midpoint for every subscribed token once per second."""
+        """Poll get_midpoint for every subscribed token at its per-token cadence.
+
+        When asymmetric polling is enabled, the "active" side (matching Bybit's
+        current direction) is polled at POLY_POLL_INTERVAL_ACTIVE; the "watch"
+        side at POLY_POLL_INTERVAL_WATCH. The master sleep tracks the active
+        cadence so watch tokens are re-evaluated at every active tick — they
+        just defer themselves via _next_poll_at.
+        """
         self._running = True
         # Create the semaphore here so it is always bound to the running event loop.
         self._fetch_sem = asyncio.Semaphore(1)
@@ -88,7 +150,13 @@ class PolymarketMidCache:
             logger.error("✗ PolymarketMidCache | no client set — polling disabled")
             return
 
-        logger.info("✓ PolymarketMidCache | polling loop started (interval=%.1fs)", POLL_INTERVAL)
+        if Config.POLY_ASYMMETRIC_POLLING:
+            logger.info(
+                "✓ PolymarketMidCache | polling loop started (asymmetric: active=%.1fs watch=%.1fs)",
+                Config.POLY_POLL_INTERVAL_ACTIVE, Config.POLY_POLL_INTERVAL_WATCH,
+            )
+        else:
+            logger.info("✓ PolymarketMidCache | polling loop started (interval=%.1fs)", POLL_INTERVAL)
 
         while self._running:
             now = time.time()
@@ -109,7 +177,11 @@ class PolymarketMidCache:
                     return_exceptions=True,
                 )
 
-            await asyncio.sleep(POLL_INTERVAL)
+            # Master sleep is always the active cadence — watch tokens defer
+            # themselves via _next_poll_at and won't be picked up here until
+            # their per-token delay elapses.
+            sleep_for = Config.POLY_POLL_INTERVAL_ACTIVE if Config.POLY_ASYMMETRIC_POLLING else POLL_INTERVAL
+            await asyncio.sleep(sleep_for)
 
     async def _fetch_one(self, token_id: str) -> None:
         """Fetch and cache the mid-price for a single token.
@@ -136,7 +208,12 @@ class PolymarketMidCache:
                     self._set(token_id, mid)
                     self._polls += 1
                     self._errors_by_token[token_id] = 0
-                    self._next_poll_at.pop(token_id, None)
+                    # Schedule the next poll at this token's cadence. For
+                    # active tokens this is essentially the current behavior
+                    # (poll again next loop iteration); for watch tokens it
+                    # defers by the watch interval, which is what gives us
+                    # the API savings.
+                    self._next_poll_at[token_id] = time.time() + self._cadence_for(token_id)
 
                     if was_new:
                         logger.info(

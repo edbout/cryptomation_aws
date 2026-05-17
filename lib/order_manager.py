@@ -1728,7 +1728,7 @@ class OrderManager:
                     f"🛑 validate_adjust_price {asset} | 8h loss ${window_loss:.2f} >= limit ${max_window_loss:.2f} — pausing"
                 )
                 asyncio.create_task(send_alert(
-                    f"⚠️ <b>8h loss limit hit</b> for {asset}\nLoss: ${window_loss:.2f} / limit ${max_window_loss:.2f} — trading paused for this 8h window"
+                    f"⚠️ <b>8h loss limit hit</b> for {asset[:3]}\nLoss: ${window_loss:.2f} / limit ${max_window_loss:.2f} — trading paused for this 8h window"
                 ))
             return None
 
@@ -2251,8 +2251,8 @@ class OrderManager:
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="expiry")
 
                     asyncio.create_task(send_alert(
-                        f"<b>{emoji} Manage positions {asset[:3]}</b>\n"
-                        f"Closure before resolution {seconds_to_expiry:.0f}s to bar end | pnl {pnl_pct:.1f}%"
+                        f"<b>{emoji} {asset[:3]} closure</b>\n"
+                        f"{seconds_to_expiry:.0f}s to bar end | pnl {pnl_pct:.1f}%"
                     ))
                     return
 
@@ -2261,7 +2261,7 @@ class OrderManager:
                     self.redis.hincrby(f"stats:trade:{asset}", "tp", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="tp")
-                    asyncio.create_task(send_alert(f"<b>🟢 Manage positions {asset[:3]} TP HIT</b>\n"
+                    asyncio.create_task(send_alert(f"<b>🟢 {asset[:3]} TP HIT</b>\n"
                                                    f"pnl {pnl_pct:.1f}% | price {current_price:.3f}"))
                     return
 
@@ -2269,7 +2269,7 @@ class OrderManager:
                     logger.info(f"🔴 Manage positions {asset} SL HIT | {pnl_pct:.1f}% <= -{sl_pct:.1f}% | price {current_price:.3f}")
                     self.redis.hincrby(f"stats:trade:{asset}", "sl", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="sl")
-                    asyncio.create_task(send_alert(f"<b>🔴 Manage positions {asset[:3]} SL HIT</b>\n"
+                    asyncio.create_task(send_alert(f"<b>🔴 {asset[:3]} SL HIT</b>\n"
                                                    f"pnl {pnl_pct:.1f}% | price {current_price:.3f}"))
                     return
 
@@ -2278,7 +2278,7 @@ class OrderManager:
                     self.redis.hincrby(f"stats:trade:{asset}", "trail_stop", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="trail")
-                    asyncio.create_task(send_alert(f"<b>🟠 Manage positions {asset[:3]} TRAIL HIT</b>\n"
+                    asyncio.create_task(send_alert(f"<b>🟠 {asset[:3]} TRAIL HIT</b>\n"
                                                    f"peak {max_pnl_pct:.1f}% | pnl {pnl_pct:.1f}% | price {current_price:.3f}"))
                     return
 

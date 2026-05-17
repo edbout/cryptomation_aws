@@ -85,6 +85,7 @@ The repo is polyglot: the trading bot itself is Python (`main.py`, `lib/`, `conf
 - When asked to improve code, prefer minimal diffs that solve the problem directly.
 - When asked for a patch, provide only the relevant code unless the user requests broader context.
 - When adding a new signal source, filter, or veto, ship it as logging-only first ("shadow mode"). After enough data has been logged to validate behavior, promote it to a live decision in a separate diff. Never combine "add the source" and "change the trade rule" in one change.
+- After any behavioral or functional code change (new feature, bug fix, config knob, runtime-affecting refactor), append a one-line summary under today's date in the `# Release notes` section of `README.md`. Date format: `DD-MM-YY` on its own line; one-liners as bullets beneath. If today already has a dated block, add a bullet to it; otherwise create a new block at the bottom. Skip pure documentation/comment changes and CLAUDE.md edits — only note things that change runtime behavior or operator-visible surfaces (dashboards, logs, config). Keep entries terse: what changed, and the env-var flag if there is one.
 
 ## Repo-Specific Notes
 - This bot uses multiple momentum inputs; changes must consider source agreement and conflict handling.
@@ -93,11 +94,11 @@ The repo is polyglot: the trading bot itself is Python (`main.py`, `lib/`, `conf
 - Keep the bot easy to debug during market hours.
 - Symbol formats vary across feeds. The canonical internal symbol is the Bybit inverse form (`BTCUSD`); other feeds are mapped to/from it:
 
-  | Asset | Bybit (canonical) | Binance | Coinbase | Chainlink |
-  |---|---|---|---|---|
-  | BTC | `BTCUSD` | `BTCUSDT` | `BTC-PERP-INTX` | `btc/usd` |
-  | ETH | `ETHUSD` | `ETHUSDT` | `ETH-PERP-INTX` | `eth/usd` |
-  | XRP | `XRPUSD` | `XRPUSDT` | `XRP-PERP-INTX` | `xrp/usd` |
-  | SOL | `SOLUSD` | `SOLUSDT` | `SOL-PERP-INTX` | `sol/usd` |
+  | Asset | Bybit (canonical) | Binance   | Coinbase        | Chainlink |
+  |-------|-------------------|-----------|-----------------|-----------|
+  | BTC   | `BTCUSD`          | `BTCUSDT` | `BTC-PERP-INTX` | `btc/usd` |
+  | ETH   | `ETHUSD`          | `ETHUSDT` | `ETH-PERP-INTX` | `eth/usd` |
+  | XRP   | `XRPUSD`          | `XRPUSDT` | `XRP-PERP-INTX` | `xrp/usd` |
+  | SOL   | `SOLUSD`          | `SOLUSDT` | `SOL-PERP-INTX` | `sol/usd` |
 
   When crossing feed boundaries, always map explicitly — never assume two feeds share a symbol string.

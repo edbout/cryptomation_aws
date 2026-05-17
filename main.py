@@ -368,7 +368,6 @@ async def _retry_failed_redemptions() -> None:
                 if ok:
                     rdb.delete(key)
                     logger.info(f"✓ retry_redeem | Success for {pos.condition_id}")
-                    await send_alert(f"✅ <b>Redemption retry succeeded</b>\ncondition_id: <code>{pos.condition_id}</code>")
             except Exception as ex:
                 logger.warning(f"✗ retry_redeem | {key}: {ex}")
     except Exception as e:
@@ -455,7 +454,7 @@ async def main():
     checker.log_status()
 
     logger.info("🚀 main | Starting")
-    await send_alert(f"<b>Restarted Bot</b>\n🚀 main | Starting")
+    await send_alert(f"<b>🚀 Restarted Bot</b>")
 
     # Clear orders + start background threads
     await order_mgr.clear_open_orders()

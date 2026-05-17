@@ -7,7 +7,7 @@ from pathlib import Path
 USER_ADDRESS = '0x4fF44F5E2c039122Daab3047F03D390AACda8915'
 ACTIVITY_URL  = 'https://data-api.polymarket.com/activity'
 POSITIONS_URL = 'https://data-api.polymarket.com/positions'
-SYMS       = ['btc', 'eth', 'sol', 'xrp', 'doge']
+SYMS       = ['btc', 'eth', 'sol', 'xrp']
 START_DATE = '2026-05-01'   # Only report data from this date onwards
 
 DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
