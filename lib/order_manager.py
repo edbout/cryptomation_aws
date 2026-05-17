@@ -18,7 +18,7 @@ from price_tracker import PriceTracker
 from lib.polymarket_mid_cache import POLY_MID_CACHE
 from lib.polymarket_positions import PolymarketPositionManager
 from lib.helpers import safe_float, get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts
-from lib.telegram_alert import send_alert as _tg_alert_async
+from lib.telegram_alert import send_alert
 
 UTC = ZoneInfo("UTC")
 
@@ -1176,11 +1176,6 @@ class OrderManager:
                         order_price, open_price, trigger_minute
                     )
                     self.redis.hincrby(f"stats:trade:{asset}", "order_placed", 1)
-                        
-                    asyncio.create_task(_tg_alert_async(
-                        f"✅ {{market_slug}} | {token} | size ${size:.2f} | win_rate {_win_rate:.1f}% | price {order_price:.4f} | "
-                        f"conf {confidence:.4f} | agree {consensus.get('agree', '')} | bankroll ${live_bankroll:.0f}"
-                    ))
                     return response
 
                 else:
@@ -1320,9 +1315,9 @@ class OrderManager:
                         f"✅ exec_order {label} {asset} | {token_short} | "
                         f"${size:.2f}@{order_price:.3f} → {exec_time:.1f}s"
                     )
-                    asyncio.create_task(_tg_alert_async(
-                        f"✅ BUY {token_short} {label} {asset} | "
-                        f"${size:.2f}@{order_price:.3f} → {exec_time:.1f}s"
+                    asyncio.create_task(send_alert(
+                        f"✅ <b>BUY {token_short} {asset[:3]}</b>\n"
+                        f"${size:.2f}@{order_price:.3f} → {label} {exec_time:.1f}s"
                     ))                    
                     did_succeed = True
                 else:
@@ -1732,7 +1727,7 @@ class OrderManager:
                 logger.info(
                     f"🛑 validate_adjust_price {asset} | 8h loss ${window_loss:.2f} >= limit ${max_window_loss:.2f} — pausing"
                 )
-                asyncio.create_task(_tg_alert_async(
+                asyncio.create_task(send_alert(
                     f"⚠️ <b>8h loss limit hit</b> for {asset}\nLoss: ${window_loss:.2f} / limit ${max_window_loss:.2f} — trading paused for this 8h window"
                 ))
             return None
@@ -2255,9 +2250,9 @@ class OrderManager:
                         self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="expiry")
 
-                    asyncio.create_task(_tg_alert_async(
-                        f"{emoji} Manage positions {asset} | closure before resolution | "
-                        f"{seconds_to_expiry:.0f}s to bar end | pnl {pnl_pct:.1f}%"
+                    asyncio.create_task(send_alert(
+                        f"<b>{emoji} Manage positions {asset[:3]}</b>\n"
+                        f"Closure before resolution {seconds_to_expiry:.0f}s to bar end | pnl {pnl_pct:.1f}%"
                     ))
                     return
 
@@ -2266,22 +2261,25 @@ class OrderManager:
                     self.redis.hincrby(f"stats:trade:{asset}", "tp", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="tp")
-                    asyncio.create_task(_tg_alert_async(f"🟢 Manage positions {asset} TP HIT | pnl {pnl_pct:.1f}% | price {current_price:.3f} >= {tp_price_target:.3f}"))
+                    asyncio.create_task(send_alert(f"<b>🟢 Manage positions {asset[:3]} TP HIT</b>\n"
+                                                   f"pnl {pnl_pct:.1f}% | price {current_price:.3f}"))
                     return
 
                 elif pnl_pct <= -sl_pct:
-                    logger.info(f"🔴 Manage positions {asset} SL HIT | {pnl_pct:.1f}% <= -{sl_pct:.1f}%")
+                    logger.info(f"🔴 Manage positions {asset} SL HIT | {pnl_pct:.1f}% <= -{sl_pct:.1f}% | price {current_price:.3f}")
                     self.redis.hincrby(f"stats:trade:{asset}", "sl", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="sl")
-                    asyncio.create_task(_tg_alert_async(f"🔴 Manage positions {asset} SL HIT | pnl {pnl_pct:.1f}% <= -{sl_pct:.1f}%"))
+                    asyncio.create_task(send_alert(f"<b>🔴 Manage positions {asset[:3]} SL HIT</b>\n"
+                                                   f"pnl {pnl_pct:.1f}% | price {current_price:.3f}"))
                     return
 
                 elif max_pnl_pct > 15 and pnl_pct <= trailing_stop_pct:
-                    logger.info(f"🟠 Manage positions {asset} TRAIL HIT pnl={pnl_pct:.1f}% | peak {max_pnl_pct:.1f}% | pnl {pnl_pct:.1f}% <= stop {trailing_stop_pct:.1f}%")
+                    logger.info(f"🟠 Manage positions {asset} TRAIL HIT pnl={pnl_pct:.1f}% | peak {max_pnl_pct:.1f}% | pnl {pnl_pct:.1f}% <= stop {trailing_stop_pct:.1f}% | price {current_price:.3f}")
                     self.redis.hincrby(f"stats:trade:{asset}", "trail_stop", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="trail")
-                    asyncio.create_task(_tg_alert_async(f"🟠 Manage positions {asset} TRAIL HIT | peak {max_pnl_pct:.1f}% | pnl {pnl_pct:.1f}% <= stop {trailing_stop_pct:.1f}%"))
+                    asyncio.create_task(send_alert(f"<b>🟠 Manage positions {asset[:3]} TRAIL HIT</b>\n"
+                                                   f"peak {max_pnl_pct:.1f}% | pnl {pnl_pct:.1f}% | price {current_price:.3f}"))
                     return
 
         except Exception as e:

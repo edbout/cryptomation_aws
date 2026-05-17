@@ -120,11 +120,11 @@ class BybitManager:
         # ----------------------------------------------------------------
         min_pct = Config.ALIGNMENT_MIN_PCT
         votes = []
-        if abs(bybit_5m_pct) > min_pct:
+        if Config.BYBIT_ENABLED and abs(bybit_5m_pct) > min_pct:
             votes.append(("bybit", bybit_5m_pct))
         if Config.BINANCE_ENABLED and abs(binance_pct) > min_pct:
             votes.append(("binance", binance_pct))
-        if abs(coinbase_pct) > min_pct:
+        if Config.COINBASE_ENABLED and abs(coinbase_pct) > min_pct:
             votes.append(("coinbase", coinbase_pct))
 
         ups = sum(1 for _, p in votes if p > 0)
@@ -133,7 +133,7 @@ class BybitManager:
         agree_dir = "UP" if ups >= downs else "DOWN"
         aligned = direction_votes >= Config.ALIGNMENT_MIN_SOURCES
 
-        n_sources = 3 if Config.BINANCE_ENABLED else 2
+        n_sources = 3 if Config.BYBIT_ENABLED and Config.BINANCE_ENABLED and Config.COINBASE_ENABLED else 2
 
         if not aligned:
             logger.info(

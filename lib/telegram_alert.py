@@ -49,7 +49,6 @@ async def send_alert(message: str) -> None:
     except Exception as e:
         logger.error(f"✗ Telegram network error: {e}")
 
-
 def send_alert_sync(message: str) -> None:
     """Send a Telegram message (sync, for use from threads/sync code)."""
     if not _BOT_TOKEN or not _CHAT_ID:
