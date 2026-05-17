@@ -111,6 +111,21 @@ class Config:
     # apples-to-apples. Tune once we have a few weeks of shadow data.
     BINANCE_OBI_SCALE: float = float(os.getenv("BINANCE_OBI_SCALE", "0.6"))
 
+    # Maximum age (seconds) for Binance perp OBI samples before they are
+    # treated as unavailable. Guards against trading on stale shadow data
+    # during a WS disconnect — partial-depth pushes arrive ~10x/sec, so 30s
+    # is comfortably above any normal gap.
+    BINANCE_PERP_OBI_MAX_AGE: float = float(os.getenv("BINANCE_PERP_OBI_MAX_AGE", "30.0"))
+
+    # ── Dual-source OBI veto (live, NOT shadow) ──────────────────────────────
+    # When true, BybitManager.get_signal requires BOTH Bybit perp OBI AND
+    # Binance perp OBI to agree (same sign, same contradiction verdict)
+    # before allowing a trade. If Binance OBI is unavailable (disabled,
+    # warming, or stale), the trade is suppressed — conservative default,
+    # consistent with "only trade when both agree".
+    # Set to false to revert to Bybit-only OBI veto (prior behavior).
+    OBI_REQUIRE_BINANCE_AGREE: bool = os.getenv("OBI_REQUIRE_BINANCE_AGREE", "true").lower() == "true"
+
     # Polymarket Assets and symbols
     WS_URL = "wss://ws-live-data.polymarket.com"
     ASSETS = ["BTCUSDT","ETHUSDT","XRPUSDT","SOLUSDT"]

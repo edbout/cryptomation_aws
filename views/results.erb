@@ -177,6 +177,52 @@
     </tbody>
   </table>
 
+  <h2>Per-source accuracy</h2>
+  <%
+    # Color a hit-rate cell: ≥55% pos, 45-55% neutral, <45% neg.
+    # 50% is the coin-flip baseline; the dead band around it avoids
+    # over-celebrating noise.
+    acc_cls = lambda do |pct|
+      next 'dim' if pct.nil?
+      next 'pos' if pct >= 55.0
+      next 'neg' if pct <  45.0
+      'neu'
+    end
+  %>
+  <p class="dim" style="margin:0 0 6px 2px">
+    Hit rate of each source's bar-close direction vs the actual Polymarket outcome, across all resolved trades.
+    <em>Overall</em> includes every trade where the source had data (treating 0.0% rows as their stored direction).
+    <em>When voting</em> excludes rows where |pct| &lt; 0.005% (source effectively flat — Chainlink heartbeat windows, thin Coinbase bars).
+    <em>Coverage</em> = share of trades where the source voted meaningfully.
+  </p>
+  <table style="margin-bottom:16px">
+    <thead>
+      <tr>
+        <th>Source</th>
+        <th>Overall</th>
+        <th>When voting</th>
+        <th>Coverage</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% [[:bybit, 'Bybit'], [:binance, 'Binance'], [:coinbase, 'Coinbase'], [:chainlink, 'Chainlink']].each do |key, label| %>
+        <% v = source_accuracy[key] %>
+        <tr>
+          <td class="sym"><%= label %></td>
+          <td class="<%= acc_cls.call(v[:overall_pct]) %>">
+            <%= v[:overall_pct].nil? ? '—' : "#{v[:overall_pct]}% (#{v[:correct]} / #{v[:total]})" %>
+          </td>
+          <td class="<%= acc_cls.call(v[:voted_pct]) %>">
+            <%= v[:voted_pct].nil? ? '—' : "#{v[:voted_pct]}% (#{v[:voted_correct]} / #{v[:voted_total]})" %>
+          </td>
+          <td class="dim">
+            <%= v[:coverage_pct].nil? ? '—' : "#{v[:coverage_pct]}%" %>
+          </td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+
   <h2>Trade History</h2>
   <details>
     <summary>Show / hide individual trades (<%= trades.size %> orders)</summary>

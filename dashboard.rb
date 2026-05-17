@@ -410,14 +410,79 @@ get '/stats' do
                         data_health: data_health }
 end
 
+# Per-source accuracy: how often each WS source's bar-close direction
+# matched the actual Polymarket outcome.
+#
+# Returns a hash keyed by source name with:
+#   total          — trades where the source had any data (dir present)
+#   correct        — of those, how many matched the actual direction
+#   overall_pct    — correct / total
+#   voted_total    — subset of total where |pct| >= VOTING_PCT_MIN (excludes
+#                    rows that effectively didn't vote — Chainlink during
+#                    heartbeat windows, Coinbase during low-trade 5m bars)
+#   voted_correct  — correct count within voted subset
+#   voted_pct      — voted_correct / voted_total
+#   coverage_pct   — voted_total / total (how often the source contributed
+#                    a meaningful signal vs sat flat)
+#
+# Only resolved trades (WIN/LOSS, not WIN~/LOSS~) are counted, so the
+# accuracy is measured against Polymarket truth, not internal consensus.
+VOTING_PCT_MIN = 0.005  # half a basis point — anything that rounded to 0.0% is excluded
+def compute_source_accuracy(trades)
+  acc = {
+    bybit:     { total: 0, correct: 0, voted_total: 0, voted_correct: 0 },
+    binance:   { total: 0, correct: 0, voted_total: 0, voted_correct: 0 },
+    coinbase:  { total: 0, correct: 0, voted_total: 0, voted_correct: 0 },
+    chainlink: { total: 0, correct: 0, voted_total: 0, voted_correct: 0 },
+  }
+
+  trades.each do |t|
+    # Only resolved-by-Polymarket trades count toward accuracy.
+    # WIN~/LOSS~ are consensus-derived fallbacks and would make a source
+    # appear to "predict" its own consensus contribution. Skip them.
+    next unless t[:verdict] == 'WIN' || t[:verdict] == 'LOSS'
+    next if t[:pm_out].empty?
+    actual_dir = t[:pm_out] == 'YES' ? 'UP' : 'DOWN'
+
+    sources = [
+      [:bybit,     t[:bar_dir], t[:bar_pct]],
+      [:binance,   t[:bar_bn],  t[:bar_bn_pct]],
+      [:coinbase,  t[:bar_cb],  t[:bar_cb_pct]],
+      [:chainlink, t[:bar_cl],  t[:bar_cl_pct]],
+    ]
+
+    sources.each do |key, dir, pct|
+      next if dir.nil? || dir.empty?  # source had no data — exclude entirely
+      acc[key][:total] += 1
+      acc[key][:correct] += 1 if dir == actual_dir
+      if pct && pct.abs >= VOTING_PCT_MIN
+        acc[key][:voted_total] += 1
+        acc[key][:voted_correct] += 1 if dir == actual_dir
+      end
+    end
+  end
+
+  acc.each_value do |v|
+    v[:overall_pct]  = v[:total] > 0       ? (v[:correct].to_f       / v[:total]       * 100).round(1) : nil
+    v[:voted_pct]    = v[:voted_total] > 0 ? (v[:voted_correct].to_f / v[:voted_total] * 100).round(1) : nil
+    v[:coverage_pct] = v[:total] > 0       ? (v[:voted_total].to_f   / v[:total]       * 100).round(1) : nil
+  end
+
+  acc
+end
+
 get '/results' do
   if params[:refresh]
     $results_cache    = nil
     $results_cache_ts = nil
   end
-  data   = load_results
-  trades = load_trades
-  erb :results, locals: { data: data, start_date: RESULTS_START.to_s, trades: trades }
+  data             = load_results
+  trades           = load_trades
+  source_accuracy  = compute_source_accuracy(trades)
+  erb :results, locals: {
+    data: data, start_date: RESULTS_START.to_s, trades: trades,
+    source_accuracy: source_accuracy,
+  }
 end
 
 get '/health' do

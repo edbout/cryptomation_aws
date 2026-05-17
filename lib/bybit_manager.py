@@ -9,8 +9,12 @@ This is the *decision* layer sitting on top of the four market-data feeds:
 `get_signal(sym)` performs N-of-M alignment voting across the three voting
 feeds (Bybit / Binance / Coinbase). A signal is "aligned" when at least
 Config.ALIGNMENT_MIN_SOURCES feeds with |pct| > Config.ALIGNMENT_MIN_PCT
-agree on direction. The aligned signal is then gated by OBI level/trend
-checks delegated to BybitFeed (same logic the ticker handler uses).
+agree on direction. The aligned signal is then gated by:
+  - Bybit perp OBI level/trend (delegated to BybitFeed — same logic the
+    ticker handler uses)
+  - Binance perp OBI agreement when Config.OBI_REQUIRE_BINANCE_AGREE is true
+    (dual-source gate — requires same sign AND same contradiction verdict,
+    suppresses if Binance OBI is unavailable or stale).
 
 Wiring
 ------
@@ -60,8 +64,11 @@ class BybitManager:
           2. Compute each feed's 5m pct.
           3. N-of-M alignment vote (Bybit / Binance / Coinbase).
           4. Apply side threshold (relaxed during epoch_bias / btc_lag windows).
-          5. OBI level + trend veto (delegated to BybitFeed).
-          6. Return signal if all gates pass.
+          5. Bybit perp OBI level + trend veto (delegated to BybitFeed).
+          6. Dual-source OBI gate (Config.OBI_REQUIRE_BINANCE_AGREE):
+             require Binance perp OBI to agree (sign_agree AND verdict_agree)
+             AND be available (not stale beyond BINANCE_PERP_OBI_MAX_AGE).
+          7. Return signal if all gates pass.
         """
         feed = self.bybit_feed
         tick = feed.data.get(sym)
@@ -182,17 +189,26 @@ class BybitManager:
             f"contradicts={obi_contradicts} | volume={high_vol} | [{reason}]"
         )
 
-        # ── OBI shadow comparison: Bybit perps vs Binance perps ─────────────
-        # Logging-only. Does NOT affect signal_ok or the trade decision.
-        # Lets us assess (over time) whether Binance perp OBI would produce
-        # different / better veto decisions than Bybit perp OBI. Threshold is
-        # scaled because Binance's deeper book compresses normalized OBI
-        # toward 0, so reusing OBI_THRESHOLDS as-is would under-veto Binance.
+        # ── Dual-source OBI gate: Bybit perps vs Binance perps ──────────────
+        # When OBI_REQUIRE_BINANCE_AGREE is true, both perp books must agree
+        # (same sign AND same contradiction verdict) before a trade passes.
+        # When false, the comparison is logged but does not affect signal_ok.
+        # Binance threshold is scaled because its deeper book compresses
+        # normalized OBI toward 0.
+        # Risk note: enabling the gate strictly tightens veto (can only
+        # reduce trade frequency vs Bybit-only, never increase it). If
+        # Binance OBI is unavailable (disabled / never received a sample /
+        # stale beyond BINANCE_PERP_OBI_MAX_AGE), the gate suppresses the
+        # trade — conservative default per "only trade when both agree".
         binance_obi = None
         binance_obi_trend = None
         if Config.BINANCE_PERP_OBI_ENABLED and self.binance_feed is not None:
             binance_obi = self.binance_feed.get_perp_obi(sym)
             binance_obi_trend = self.binance_feed.get_perp_obi_trend(sym)
+
+        binance_would_contradict: Optional[bool] = None
+        sign_agree: Optional[bool] = None
+        verdict_agree: Optional[bool] = None
 
         if binance_obi is not None:
             binance_thresh = _obi_thresh * Config.BINANCE_OBI_SCALE
@@ -211,15 +227,27 @@ class BybitManager:
             )
             verdict_agree = (obi_contradicts == binance_would_contradict)
             logger.info(
-                f"\U0001f50d OBI_shadow | {sym:>8} | "
+                f"\U0001f50d OBI_compare | {sym:>8} | "
                 f"bybit  obi={obi:+.3f} trend={obi_trend:+.4f} thresh={_obi_thresh:.2f} contra={obi_contradicts} | "
                 f"binance obi={binance_obi:+.3f} trend={binance_trend_used:+.4f} thresh={binance_thresh:.2f} contra={binance_would_contradict} | "
                 f"sign_agree={sign_agree} verdict_agree={verdict_agree}"
             )
-        elif Config.BINANCE_PERP_OBI_ENABLED:
-            logger.debug(
-                f"\U0001f50d OBI_shadow | {sym:>8} | binance perp OBI not yet available (warming up)"
-            )
+
+        # Live veto. Only meaningful when Bybit already passed — if Bybit
+        # already vetoed (signal_ok=False), there's nothing to tighten.
+        if signal_ok and Config.OBI_REQUIRE_BINANCE_AGREE:
+            if binance_obi is None:
+                signal_ok = False
+                logger.info(
+                    f"\U0001f6ab get_signal | {sym:>8} | suppressed: binance perp OBI unavailable "
+                    f"(enabled={Config.BINANCE_PERP_OBI_ENABLED}, max_age={Config.BINANCE_PERP_OBI_MAX_AGE:.0f}s)"
+                )
+            elif not (sign_agree and verdict_agree):
+                signal_ok = False
+                logger.info(
+                    f"\U0001f6ab get_signal | {sym:>8} | suppressed: binance OBI disagrees | "
+                    f"sign_agree={sign_agree} verdict_agree={verdict_agree}"
+                )
 
         if not signal_ok:
             return None

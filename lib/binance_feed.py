@@ -131,6 +131,13 @@ class BinanceFeed:
         self.obi_trackers: Dict[str, OrderBookTracker] = {
             s: OrderBookTracker(window=6) for s in Config.BINANCE_SYMBOLS
         }
+        # Per-symbol wall-clock timestamp of the most recent partial-depth
+        # update. Read by get_perp_obi() to enforce
+        # Config.BINANCE_PERP_OBI_MAX_AGE — prevents trading on stale data
+        # after a WS disconnect (the OrderBookTracker's deque retains values
+        # indefinitely otherwise, so without this we'd silently keep returning
+        # the last smoothed value).
+        self._perp_ob_last_update: Dict[str, float] = {s: 0.0 for s in Config.BINANCE_SYMBOLS}
 
         # Late-bound — set via `attach_validator` so we avoid a circular import
         # against main.py at module load time.
@@ -423,6 +430,7 @@ class BinanceFeed:
             if bid_qty <= 0 and ask_qty <= 0:
                 return
             self.obi_trackers[sym].update(bid_qty, ask_qty)
+            self._perp_ob_last_update[sym] = time.time()
             logger.debug(
                 "📊 _handle_perp_depth | %s bid=%.2f ask=%.2f obi=%+.4f",
                 sym, bid_qty, ask_qty, self.obi_trackers[sym].get(),
@@ -505,11 +513,12 @@ class BinanceFeed:
                 return binance_sym
         return None
 
-    def get_perp_obi(self, bybit_sym: str) -> Optional[float]:
-        """Latest smoothed Binance perp OBI for `bybit_sym` (e.g. 'BTCUSD').
+    def _resolve_fresh_tracker(self, bybit_sym: str) -> Optional[OrderBookTracker]:
+        """Map `bybit_sym` → tracker, returning None if disabled, missing,
+        or last update is older than Config.BINANCE_PERP_OBI_MAX_AGE.
 
-        Returns None when the shadow stream is disabled or no samples have
-        arrived yet — callers should treat None as 'no shadow signal'.
+        Centralises the freshness gate so get_perp_obi() and
+        get_perp_obi_trend() never disagree about availability.
         """
         if not Config.BINANCE_PERP_OBI_ENABLED:
             return None
@@ -517,6 +526,24 @@ class BinanceFeed:
         if binance_sym is None:
             return None
         tracker = self.obi_trackers.get(binance_sym)
+        if tracker is None:
+            return None
+        last = self._perp_ob_last_update.get(binance_sym, 0.0)
+        if last <= 0.0:
+            return None  # never received a sample
+        if (time.time() - last) > Config.BINANCE_PERP_OBI_MAX_AGE:
+            return None  # stale — WS likely disconnected
+        return tracker
+
+    def get_perp_obi(self, bybit_sym: str) -> Optional[float]:
+        """Latest smoothed Binance perp OBI for `bybit_sym` (e.g. 'BTCUSD').
+
+        Returns None when the perp stream is disabled, never produced a
+        sample, or the latest sample is older than BINANCE_PERP_OBI_MAX_AGE.
+        Callers should treat None as 'Binance OBI not available' and apply
+        the dual-source veto policy accordingly.
+        """
+        tracker = self._resolve_fresh_tracker(bybit_sym)
         if tracker is None or len(tracker.history) == 0:
             return None
         return tracker.get()
@@ -525,14 +552,9 @@ class BinanceFeed:
         """Linear-regression slope of recent Binance perp OBI samples.
 
         Returns None until the tracker has accumulated >= 3 samples (matching
-        OrderBookTracker.trend()'s own guard).
+        OrderBookTracker.trend()'s own guard), or when the data is stale.
         """
-        if not Config.BINANCE_PERP_OBI_ENABLED:
-            return None
-        binance_sym = self._bybit_to_binance(bybit_sym)
-        if binance_sym is None:
-            return None
-        tracker = self.obi_trackers.get(binance_sym)
+        tracker = self._resolve_fresh_tracker(bybit_sym)
         if tracker is None or len(tracker.history) < 3:
             return None
         return tracker.trend()
