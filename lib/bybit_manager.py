@@ -182,6 +182,45 @@ class BybitManager:
             f"contradicts={obi_contradicts} | volume={high_vol} | [{reason}]"
         )
 
+        # ── OBI shadow comparison: Bybit perps vs Binance perps ─────────────
+        # Logging-only. Does NOT affect signal_ok or the trade decision.
+        # Lets us assess (over time) whether Binance perp OBI would produce
+        # different / better veto decisions than Bybit perp OBI. Threshold is
+        # scaled because Binance's deeper book compresses normalized OBI
+        # toward 0, so reusing OBI_THRESHOLDS as-is would under-veto Binance.
+        binance_obi = None
+        binance_obi_trend = None
+        if Config.BINANCE_PERP_OBI_ENABLED and self.binance_feed is not None:
+            binance_obi = self.binance_feed.get_perp_obi(sym)
+            binance_obi_trend = self.binance_feed.get_perp_obi_trend(sym)
+
+        if binance_obi is not None:
+            binance_thresh = _obi_thresh * Config.BINANCE_OBI_SCALE
+            # Trend can still be None (fewer than 3 samples); 0.0 is a safe
+            # neutral that disables the "recovering" relaxation in
+            # _obi_contradicts, matching how the live Bybit path treats a
+            # cold tracker.
+            binance_trend_used = binance_obi_trend if binance_obi_trend is not None else 0.0
+            binance_would_contradict = feed._obi_contradicts(
+                binance_obi, binance_trend_used, binance_thresh, bybit_5m_pct
+            )
+            sign_agree = (
+                (obi > 0 and binance_obi > 0)
+                or (obi < 0 and binance_obi < 0)
+                or (obi == 0 and binance_obi == 0)
+            )
+            verdict_agree = (obi_contradicts == binance_would_contradict)
+            logger.info(
+                f"\U0001f50d OBI_shadow | {sym:>8} | "
+                f"bybit  obi={obi:+.3f} trend={obi_trend:+.4f} thresh={_obi_thresh:.2f} contra={obi_contradicts} | "
+                f"binance obi={binance_obi:+.3f} trend={binance_trend_used:+.4f} thresh={binance_thresh:.2f} contra={binance_would_contradict} | "
+                f"sign_agree={sign_agree} verdict_agree={verdict_agree}"
+            )
+        elif Config.BINANCE_PERP_OBI_ENABLED:
+            logger.debug(
+                f"\U0001f50d OBI_shadow | {sym:>8} | binance perp OBI not yet available (warming up)"
+            )
+
         if not signal_ok:
             return None
 

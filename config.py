@@ -96,6 +96,21 @@ class Config:
     # e.g. 1.4 → XRP effective threshold becomes 0.18 * 1.4 = 0.25 during lag moves.
     OBI_BTC_LAG_RELAX: float = float(os.getenv("OBI_BTC_LAG_RELAX", "1.4"))
 
+    # ── Binance perpetuals OBI shadow comparison (logging-only) ──────────────
+    # BybitManager.get_signal compares Bybit perp OBI against Binance perp OBI
+    # to assess whether Binance perps would be a better veto source. Strictly
+    # logging — does NOT affect signal_ok or trade decisions.
+    BINANCE_PERP_OBI_ENABLED: bool = os.getenv("BINANCE_PERP_OBI_ENABLED", "true").lower() == "true"
+    BINANCE_PERP_WS_URL: str = os.getenv("BINANCE_PERP_WS_URL", "wss://fstream.binance.com/stream")
+    # Partial-depth level for the Binance Futures stream. Valid values: 5, 10, 20.
+    # 20 chosen as default: still ~3-5× the USD depth of Bybit's depth=50 inverse book.
+    BINANCE_PERP_OBI_DEPTH: int = int(os.getenv("BINANCE_PERP_OBI_DEPTH", "20"))
+    # Binance perp books are deeper than Bybit inverse, which compresses
+    # normalized OBI toward 0. This multiplier scales OBI_THRESHOLDS when
+    # computing the Binance "would-contradict" verdict so the comparison is
+    # apples-to-apples. Tune once we have a few weeks of shadow data.
+    BINANCE_OBI_SCALE: float = float(os.getenv("BINANCE_OBI_SCALE", "0.6"))
+
     # Polymarket Assets and symbols
     WS_URL = "wss://ws-live-data.polymarket.com"
     ASSETS = ["BTCUSDT","ETHUSDT","XRPUSDT","SOLUSDT"]

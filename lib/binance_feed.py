@@ -30,6 +30,7 @@ from typing import Dict, Optional
 import websockets
 
 from config import Config
+from lib.bybit_trackers import OrderBookTracker
 from lib.helpers import get_current_5m_bar_ts
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,16 @@ class BinanceFeed:
         }
         self._last_trigger_ts: Dict[str, float] = {s: 0.0 for s in Config.BINANCE_SYMBOLS}
 
+        # Binance perpetuals OBI trackers — keyed by Binance perp symbol
+        # (BTCUSDT, etc). Populated by the fstream.binance.com partial-depth
+        # listener and consumed by BybitManager.get_signal as a shadow
+        # comparison against Bybit's perp OBI. Read via get_perp_obi() /
+        # get_perp_obi_trend() so callers don't need to know about symbol
+        # mapping or feature flags.
+        self.obi_trackers: Dict[str, OrderBookTracker] = {
+            s: OrderBookTracker(window=6) for s in Config.BINANCE_SYMBOLS
+        }
+
         # Late-bound — set via `attach_validator` so we avoid a circular import
         # against main.py at module load time.
         self._validator = None
@@ -128,6 +139,9 @@ class BinanceFeed:
 
         self.running = False
         self.task: Optional[asyncio.Task] = None
+        # Separate task for the perp OBI WS so a failure on either stream
+        # cannot disrupt the other.
+        self.perp_ob_task: Optional[asyncio.Task] = None
 
     # ── Wiring ───────────────────────────────────────────────────────────────
 
@@ -151,10 +165,22 @@ class BinanceFeed:
         self.task = asyncio.create_task(self.listen_all())
         logger.info("✓ BinanceFeed | starting | symbols=%s", Config.BINANCE_SYMBOLS)
 
+        # Shadow stream: Binance perpetuals partial-depth book → OBI trackers.
+        # Logging-only consumer; failure here must not affect kline_1m above.
+        if Config.BINANCE_PERP_OBI_ENABLED and not self.perp_ob_task:
+            self.perp_ob_task = asyncio.create_task(self.listen_perp_orderbook())
+            logger.info(
+                "✓ BinanceFeed | starting perp OBI shadow stream | depth=%d",
+                Config.BINANCE_PERP_OBI_DEPTH,
+            )
+
     def stop(self):
         if self.task:
             self.task.cancel()
             self.task = None
+        if self.perp_ob_task:
+            self.perp_ob_task.cancel()
+            self.perp_ob_task = None
         self.running = False
 
     # ── Bar / pct tracking ───────────────────────────────────────────────────
@@ -358,3 +384,155 @@ class BinanceFeed:
             "📊 binance_vol_status | %s | Last:%.2f (%.2fx) | Prev:%.2f (%.2fx) | Avg:%.2f",
             sym.rjust(8), latest, latest_x, prev, prev_x, avg,
         )
+
+    # ── Perpetuals OBI shadow stream (logging-only) ─────────────────────────
+    #
+    # Connects to fstream.binance.com partial-depth (depth5/10/20 @100ms) for
+    # each BINANCE_SYMBOLS pair. Partial-depth streams deliver the *full
+    # top-N snapshot* on every push, so we can sum bid/ask qty directly and
+    # feed OrderBookTracker without maintaining a local diff-based book.
+    #
+    # Bybit perp inverse uses depth=50 with a snapshot+delta book; Binance
+    # depth=20 partial is shallower in level count but typically deeper in
+    # USD value per level, so this is still a "meaningful" book signal.
+    # Threshold scaling for the shadow comparison happens in BybitManager,
+    # not here — this listener just maintains raw normalized OBI per symbol.
+
+    def _build_perp_streams_url(self) -> str:
+        depth = Config.BINANCE_PERP_OBI_DEPTH
+        streams = "/".join(
+            f"{s.lower()}@depth{depth}@100ms" for s in Config.BINANCE_SYMBOLS
+        )
+        return f"{Config.BINANCE_PERP_WS_URL}?streams={streams}"
+
+    def _handle_perp_depth(self, payload: dict) -> None:
+        """Parse one partial-depth message; sum top-N bid/ask qty into the tracker.
+
+        Partial-depth payload shape:
+          {"e":"depthUpdate","s":"BTCUSDT","b":[[price,qty],...],"a":[[...]],...}
+        Levels are strings — coerce to float defensively.
+        """
+        try:
+            sym = payload.get("s") or ""
+            if sym not in self.obi_trackers:
+                return
+            bids = payload.get("b") or []
+            asks = payload.get("a") or []
+            bid_qty = sum(float(level[1]) for level in bids if len(level) >= 2)
+            ask_qty = sum(float(level[1]) for level in asks if len(level) >= 2)
+            if bid_qty <= 0 and ask_qty <= 0:
+                return
+            self.obi_trackers[sym].update(bid_qty, ask_qty)
+            logger.debug(
+                "📊 _handle_perp_depth | %s bid=%.2f ask=%.2f obi=%+.4f",
+                sym, bid_qty, ask_qty, self.obi_trackers[sym].get(),
+            )
+        except Exception as e:
+            logger.debug("✗ BinanceFeed | _handle_perp_depth error: %s", e)
+
+    async def listen_perp_orderbook(self):
+        """Async WS task: maintain self.obi_trackers from Binance perps depth stream.
+
+        Has its own reconnect/backoff loop, completely independent from
+        listen_all (kline_1m). A failure here logs and retries; it must
+        never interfere with the trigger-emitting kline stream.
+        """
+        url = self._build_perp_streams_url()
+        _retry_count = 0
+        _disconnect_ts: Optional[float] = None
+        while True:
+            try:
+                async with websockets.connect(url, ping_interval=20, ping_timeout=30) as ws:
+                    if _disconnect_ts is not None:
+                        down_secs = int(time.time() - _disconnect_ts)
+                        logger.info(
+                            "✓ BinanceFeed | perp OBI reconnected after %ds down",
+                            down_secs,
+                        )
+                    _retry_count = 0
+                    _disconnect_ts = None
+                    logger.info(
+                        "✓ BinanceFeed | perp OBI connected | streams=%s",
+                        [
+                            f"{s.lower()}@depth{Config.BINANCE_PERP_OBI_DEPTH}@100ms"
+                            for s in Config.BINANCE_SYMBOLS
+                        ],
+                    )
+
+                    async for msg in ws:
+                        if not isinstance(msg, str):
+                            continue
+                        try:
+                            envelope = json.loads(msg)
+                        except json.JSONDecodeError:
+                            continue
+                        data = envelope.get("data") if isinstance(envelope, dict) else None
+                        if not isinstance(data, dict):
+                            continue
+                        self._handle_perp_depth(data)
+
+            except (websockets.ConnectionClosed, ConnectionResetError) as e:
+                if _disconnect_ts is None:
+                    _disconnect_ts = time.time()
+                _retry_count += 1
+                wait = min(3 * (2 ** (_retry_count - 1)), 60)
+                logger.warning(
+                    "⚠️ BinanceFeed | perp OBI disconnected (retry #%d in %ds): %s",
+                    _retry_count, wait, e,
+                )
+                await asyncio.sleep(wait)
+            except asyncio.CancelledError:
+                logger.info("✓ BinanceFeed | perp OBI listener cancelled")
+                raise
+            except Exception as e:
+                if _disconnect_ts is None:
+                    _disconnect_ts = time.time()
+                _retry_count += 1
+                wait = min(5 * (2 ** (_retry_count - 1)), 60)
+                logger.exception(
+                    "✗ BinanceFeed | perp OBI top-level error (retry #%d in %ds): %r",
+                    _retry_count, wait, e,
+                )
+                await asyncio.sleep(wait)
+
+    # ── Public accessors for BybitManager shadow comparison ─────────────────
+
+    @classmethod
+    def _bybit_to_binance(cls, bybit_sym: str) -> Optional[str]:
+        """Inverse of _BINANCE_TO_BYBIT. Returns None if no mapping exists."""
+        for binance_sym, by_sym in cls._BINANCE_TO_BYBIT.items():
+            if by_sym == bybit_sym:
+                return binance_sym
+        return None
+
+    def get_perp_obi(self, bybit_sym: str) -> Optional[float]:
+        """Latest smoothed Binance perp OBI for `bybit_sym` (e.g. 'BTCUSD').
+
+        Returns None when the shadow stream is disabled or no samples have
+        arrived yet — callers should treat None as 'no shadow signal'.
+        """
+        if not Config.BINANCE_PERP_OBI_ENABLED:
+            return None
+        binance_sym = self._bybit_to_binance(bybit_sym)
+        if binance_sym is None:
+            return None
+        tracker = self.obi_trackers.get(binance_sym)
+        if tracker is None or len(tracker.history) == 0:
+            return None
+        return tracker.get()
+
+    def get_perp_obi_trend(self, bybit_sym: str) -> Optional[float]:
+        """Linear-regression slope of recent Binance perp OBI samples.
+
+        Returns None until the tracker has accumulated >= 3 samples (matching
+        OrderBookTracker.trend()'s own guard).
+        """
+        if not Config.BINANCE_PERP_OBI_ENABLED:
+            return None
+        binance_sym = self._bybit_to_binance(bybit_sym)
+        if binance_sym is None:
+            return None
+        tracker = self.obi_trackers.get(binance_sym)
+        if tracker is None or len(tracker.history) < 3:
+            return None
+        return tracker.trend()
