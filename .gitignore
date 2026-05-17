@@ -18,6 +18,9 @@ log/
 tmp/
 *.tmp
 
+output/
+*.csv
+
 # Secrets / keys
 ireland.pem
 *.pem
