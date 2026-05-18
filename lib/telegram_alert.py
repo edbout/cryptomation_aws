@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Telegram alerting for critical bot events."""
+"""Telegram alerting for bot events."""
 import os
 import logging
 import aiohttp

@@ -52,3 +52,6 @@ Possible mitigations:
 - Add the perp OBI stream to BinanceFeed, now requires Binance & ByBit OBI alignment
 - Asymmetric mid-price polling implementation
 - Per-source accuracy summary on /results dashboard (Bybit / Binance / Coinbase / Chainlink — Overall, When voting, Coverage)
+
+18-05-26
+- Add post-suppression outcome tracking: `lib/suppression_store.py` records the first vetoed signal per (asset, epoch); `polymarket_order_outcome()` emits `🔍 suppressed_outcome | … | vetoed_dir=UP/DOWN | resolved=YES/NO | would_be=WIN/LOSS` so OBI veto effectiveness can be quantified from logs.

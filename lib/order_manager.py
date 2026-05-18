@@ -19,6 +19,7 @@ from lib.polymarket_mid_cache import POLY_MID_CACHE
 from lib.polymarket_positions import PolymarketPositionManager
 from lib.helpers import safe_float, get_utc_now, get_seconds_since_5m_start, get_current_5m_bar_ts
 from lib.telegram_alert import send_alert
+from lib import suppression_store
 
 UTC = ZoneInfo("UTC")
 
@@ -2095,6 +2096,28 @@ class OrderManager:
                 f"price={price:.3f}→{outcome_price:.3f} | "
                 f"pnl={result:.4f} ({result_percent:+.1f}%)"
             )
+
+            # ── OBI veto feedback loop ──────────────────────────────────────────────
+            # If a signal was suppressed for this (asset, epoch) pair, emit a
+            # 🔍 suppressed_outcome line so we can measure veto effectiveness.
+            # Parses epoch_ts from the market slug (e.g. "eth-updown-5m-1779066300"
+            # -> 1779066300).  Silently skipped when slug is non-standard.
+            try:
+                epoch_ts = int(market_slug.rsplit("-", 1)[-1])
+                suppressed = suppression_store.pop(asset, epoch_ts)
+                if suppressed is not None:
+                    vetoed_dir = suppressed["vetoed_dir"]
+                    # Resolved direction: outcome=="YES" -> price went UP,
+                    #                     outcome=="NO"  -> price went DOWN.
+                    resolved_dir = "UP" if outcome == "YES" else "DOWN"
+                    would_be = "WIN" if vetoed_dir == resolved_dir else "LOSS"
+                    logger.info(
+                        f"🔍 suppressed_outcome | {asset} | vetoed_dir={vetoed_dir} | "
+                        f"epoch={epoch_ts} | resolved={outcome} | would_be={would_be}"
+                    )
+            except (ValueError, IndexError):
+                pass  # slug did not end in a numeric epoch - skip silently
+
             return True
 
         except Exception as e:

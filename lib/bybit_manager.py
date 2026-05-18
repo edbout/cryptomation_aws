@@ -29,7 +29,8 @@ import time
 from typing import Any, Optional, Tuple
 
 from config import Config
-from lib.helpers import normalize_asset
+from lib.helpers import normalize_asset, get_current_5m_bar_ts
+from lib import suppression_store
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,16 @@ class BybitManager:
                 )
 
         if not signal_ok:
+            # Record first suppression per (asset, epoch) so order_manager
+            # can emit a 🔍 suppressed_outcome line when the market resolves.
+            # Only meaningful when there was a valid directional signal (side
+            # not None) — pure volume / OBI failures with no side are skipped.
+            if side is not None:
+                suppression_store.record(
+                    normalize_asset(sym),
+                    get_current_5m_bar_ts(time.time()),
+                    "UP" if bybit_5m_pct > 0 else "DOWN",
+                )
             return None
 
         bybit_dir = "UP" if bybit_5m_pct > 0 else "DOWN"
