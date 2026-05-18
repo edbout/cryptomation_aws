@@ -30,7 +30,9 @@ from typing import Any, Optional, Tuple
 
 from config import Config
 from lib.helpers import normalize_asset, get_current_5m_bar_ts
+from lib.polymarket_mid_cache import POLY_MID_CACHE
 from lib import suppression_store
+from lib import streak_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,59 @@ class BybitManager:
         logger.debug(f"\U0001f4ca get_signal | {sym} tick data: {tick}")
         if not tick or tick.candle_5m_pct is None:
             return None
+
+        # ── Pre-filter: near-resolved / PRICE_MAX short-circuit ─────────────
+        # Mirrors the downstream gates in order_manager (near-resolved early
+        # exit in safe_place_order and the PRICE_MAX check in
+        # _validate_adjust_price). Doing it here skips the whole alignment
+        # vote + OBI compute + Binance comparison when the market is already
+        # untradeable. Same outcome as the downstream veto — only the
+        # execution ordering changes; no strategy change.
+        #
+        # Staleness guard: POLY_MID_CACHE.get() returns None whenever its
+        # internal freshness threshold (max(STALE_SECS=3.0s, cadence*1.5))
+        # is exceeded. That budget is always tighter than the 10s ceiling
+        # called out in the design — so on a stale or missing cache we
+        # simply fall through to the existing pipeline.
+        asset_key = normalize_asset(sym)
+        _token_pair = feed._token_cache.get(asset_key)
+        if _token_pair is not None:
+            _yes_token_id, _ = _token_pair
+            _cached_mid = POLY_MID_CACHE.get(_yes_token_id)
+            if _cached_mid is not None:
+                # Near-resolved at either extreme. Same check the live
+                # _on_ticker trigger and safe_place_order use.
+                if (_cached_mid >= Config.NEAR_RESOLVED_THRESHOLD
+                        or _cached_mid <= 1.0 - Config.NEAR_RESOLVED_THRESHOLD):
+                    logger.info(
+                        "\U0001f6ab pre-filter | %s | near-resolved | "
+                        "yes_mid=%.4f (thr=%.2f)",
+                        sym, _cached_mid, Config.NEAR_RESOLVED_THRESHOLD,
+                    )
+                    return None
+                # PRICE_MAX on the side we'd actually buy. Replicate the
+                # order_price formula in safe_place_order
+                # (round(mid * 0.999, 2), floored at PRICE_MIN) so the
+                # pre-filter exactly matches the downstream veto — no edge
+                # case where this fires but the live path would have passed.
+                _would_buy_yes = tick.candle_5m_pct > 0
+                _buy_side_mid = _cached_mid if _would_buy_yes else (1.0 - _cached_mid)
+                _est_order_price = max(round(_buy_side_mid * 0.999, 2), Config.PRICE_MIN)
+                if _est_order_price > Config.PRICE_MAX:
+                    # Match the existing skip counter so the calibration
+                    # readout in balance_check stays accurate.
+                    if self._rdb is not None:
+                        try:
+                            self._rdb.incr("bot:skip:price_max")
+                        except Exception:
+                            pass
+                    logger.info(
+                        "\U0001f6ab pre-filter | %s | price_max | %s "
+                        "buy_mid=%.4f → order=%.2f > max=%.2f",
+                        sym, "UP" if _would_buy_yes else "DOWN",
+                        _buy_side_mid, _est_order_price, Config.PRICE_MAX,
+                    )
+                    return None
 
         bybit_5m_pct = tick.candle_5m_pct
         high_vol = tick.high_volume if Config.REQUIRE_VOL else True
@@ -263,6 +318,31 @@ class BybitManager:
                 )
             return None
 
+        # ── Streak circuit-breaker ───────────────────────────────────────────
+        # Checked after all other gates pass, so we only fire on signals that
+        # would otherwise reach order placement.
+        # Shadow mode (STREAK_PAUSE_LIVE=false): logs 🔍 and lets the signal
+        # through — run for ≥48 h to validate hit rate before going live.
+        # Live mode  (STREAK_PAUSE_LIVE=true):  logs 🚫 and returns None.
+        asset_usdt = normalize_asset(sym)
+        paused, n_losses, secs_left = streak_tracker.check(
+            asset_usdt,
+            Config.STREAK_PAUSE_MIN_LOSSES,
+            Config.STREAK_PAUSE_COOLDOWN,
+        )
+        if paused:
+            if Config.STREAK_PAUSE_LIVE:
+                logger.info(
+                    f"\U0001f6ab get_signal | {asset_usdt} | streak_pause | "
+                    f"{n_losses} consecutive losses | cooling down {secs_left:.0f}s"
+                )
+                return None
+            else:
+                logger.info(
+                    f"\U0001f50d streak_pause | {asset_usdt} | would_suppress | "
+                    f"{n_losses} consecutive losses | {secs_left:.0f}s remaining"
+                )
+
         bybit_dir = "UP" if bybit_5m_pct > 0 else "DOWN"
         cb_dir = "UP" if coinbase_pct > 0 else ("DOWN" if coinbase_pct < 0 else "")
         cl_dir = "UP" if chainlink_pct > 0 else ("DOWN" if chainlink_pct < 0 else "")
@@ -276,4 +356,4 @@ class BybitManager:
             "agree": f"{direction_votes}/{n_sources}",
         }
 
-        return normalize_asset(sym), side, bybit_5m_pct, open_price, consensus
+        return asset_usdt, side, bybit_5m_pct, open_price, consensus

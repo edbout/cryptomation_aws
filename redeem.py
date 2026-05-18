@@ -229,7 +229,7 @@ class PolymarketRedeemer:
                     markets[cid]['size'] += size
                 
                 if pos.get("redeemable") or cur_price >= 0.99:
-                    logger.debug(f"get_redeemable_positions | [WINNER DETECTED] {pos['title'][:50]} -> ${value:.2f}")
+                    logger.debug(f"✓ get_redeemable_positions | [WINNER DETECTED] {pos['title'][:50]} -> ${value:.2f}")
             
             positions_list = [
                 RedeemPosition(
@@ -242,7 +242,7 @@ class PolymarketRedeemer:
                 for cid, m in markets.items()
             ]
             
-            logger.debug(f"✓get_redeemable_positions | [READY] Found {len(positions_list)} redeemable | Total: ${total_value:.2f}")
+            logger.debug(f"✓ get_redeemable_positions | [READY] Found {len(positions_list)} redeemable | Total: ${total_value:.2f}")
             return positions_list
             
         except Exception as e:
@@ -282,22 +282,22 @@ class PolymarketRedeemer:
                 logger.info(f"redeem_high_gas | [PENDING] https://polygonscan.com/tx/{tx_hash.hex()}")
                 receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
                 if receipt.status == 1:
-                    logger.info(f"redeem_high_gas | [CONFIRMED] ${position.value:.2f} block={receipt.blockNumber}")
+                    logger.info(f"✓ redeem_high_gas | [CONFIRMED] ${position.value:.2f} block={receipt.blockNumber}")
                     return True
                 else:
-                    logger.error(f"redeem_high_gas | [REVERTED] tx={tx_hash.hex()}")
+                    logger.error(f"✗ redeem_high_gas | [REVERTED] tx={tx_hash.hex()}")
                     return False
 
             except Exception as e:
                 error_str = str(e).lower()
                 if any(x in error_str for x in ["already known", "nonce too low"]):
-                    logger.info(f"redeem_high_gas | [TX] Already pending")
+                    logger.info(f"✓ redeem_high_gas | [TX] Already pending")
                     return True
                 elif "underpriced" in error_str:
-                    logger.info(f"redeem_high_gas | [GAS] Retry {attempt+1}/{max_retries}")
+                    logger.info(f"✓ redeem_high_gas | [GAS] Retry {attempt+1}/{max_retries}")
                     time.sleep(2)
                 else:
-                    logger.error(f"redeem_high_gas | [TX FAIL] {e}")
+                    logger.error(f"✗ redeem_high_gas | [TX FAIL] {e}")
                     time.sleep(2)
 
         # All attempts failed — queue for retry and alert
@@ -311,7 +311,7 @@ class PolymarketRedeemer:
             })
             rdb.setex(f"redeem:retry:{position.condition_id}", 600, retry_payload)
         except Exception as ex:
-            logger.warning(f"redeem_high_gas | [RETRY QUEUE] Redis write failed: {ex}")
+            logger.warning(f"✗ redeem_high_gas | [RETRY QUEUE] Redis write failed: {ex}")
         logger.error(f"🚨 redeem_high_gas | [FAILED] alerting & queuing retry for {position.condition_id}")
         return False
     
@@ -349,13 +349,13 @@ class PolymarketRedeemer:
                 # Relayer accepted — fall through to high-gas to get on-chain confirmation.
                 # Gasless gives no tx hash we can wait on, so high-gas acts as the
                 # confirmed path (it will hit "already known" if relayer already broadcast it).
-                logger.info(f"redeem_gasless | [RELAYER ACCEPTED] falling through to confirmed path")
+                logger.info(f"✓ redeem_gasless | [RELAYER ACCEPTED] falling through to confirmed path")
                 return self.redeem_high_gas(position)
             else:
-                logger.error(f"redeem_gasless | [GASLESS] FAIL {resp.status_code}")
+                logger.error(f"✗ redeem_gasless | [GASLESS] FAIL {resp.status_code}")
                 return self.redeem_high_gas(position)
         except Exception as e:
-            logger.error(f"redeem_gasless | [GASLESS ERROR] {e}")
+            logger.error(f"✗ redeem_gasless | [GASLESS ERROR] {e}")
             return self.redeem_high_gas(position)
     
     def run_redeem_pipeline(self, auto_confirm: bool = False, positions: list = None) -> dict:
@@ -366,7 +366,7 @@ class PolymarketRedeemer:
         
         positions = self.get_redeemable_positions(positions=positions)
         if not positions:
-            logger.debug("No profitable positions found")
+            logger.debug("✓ No profitable positions found")
             return {"status": "no_positions"}
         
         total_value = sum(p.value for p in positions)
@@ -384,15 +384,15 @@ class PolymarketRedeemer:
         for i, pos in enumerate(positions, 1):
             redis_key = f"redeemed:{pos.condition_id}"
             if self.redis.exists(redis_key):
-                logger.debug(f"run_redeem_pipeline | [{i}/{len(positions)}] Skipping already-redeemed {pos.title[:40]} (within 24h)")
+                logger.debug(f"✓ run_redeem_pipeline | [{i}/{len(positions)}] Skipping already-redeemed {pos.title[:40]} (within 24h)")
                 continue
-            logger.debug(f"\n run_redeem_pipeline | [{i}/{len(positions)}] {pos.title}")
+            logger.debug(f"✓ run_redeem_pipeline | [{i}/{len(positions)}] {pos.title}")
             success = self.redeem_gasless(pos) if self.mode == "gasless" else self.redeem_high_gas(pos)
             if success:
                 self.redis.setex(redis_key, 86400, "1")  # skip for 24h — API cache lag
                 successful += 1
         
-        logger.debug(f"run_redeem_pipeline | [DONE] {successful}/{len(positions)} successful")
+        logger.debug(f"✓ run_redeem_pipeline | [DONE] {successful}/{len(positions)} successful")
 
         # Sweep USDC.e payouts back into pUSD so the bot can keep trading.
         # Only runs if at least one redeem succeeded — no point burning gas otherwise.
@@ -436,9 +436,9 @@ def main():
         redeemer.show_active_positions_dashboard()
         redeemer.run_redeem_pipeline(auto_confirm=args.auto)
     except KeyboardInterrupt:
-        logger.info("main | Cancelled")
+        logger.info("✓ main | Cancelled")
     except Exception as e:
-        logger.error(f"main | Fatal: {e}", exc_info=True)
+        logger.error(f"✗ main | Fatal: {e}", exc_info=True)
         sys.exit(1)
 
 _redeemer: "PolymarketRedeemer | None" = None

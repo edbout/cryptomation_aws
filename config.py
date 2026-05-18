@@ -125,6 +125,18 @@ class Config:
     # Set to false to revert to Bybit-only OBI veto (prior behavior).
     OBI_REQUIRE_BINANCE_AGREE: bool = os.getenv("OBI_REQUIRE_BINANCE_AGREE", "true").lower() == "true"
 
+    # ── Streak circuit-breaker ───────────────────────────────────────────────
+    # Suppresses (or shadow-logs) signals for an asset after N consecutive
+    # losses within a rolling cooldown window.
+    #
+    # STREAK_PAUSE_LIVE = false  →  shadow mode: logs 🔍 streak_pause but lets
+    #                                the signal through. Run for ≥48 h to validate
+    #                                before flipping to true (per CLAUDE.md convention).
+    # STREAK_PAUSE_LIVE = true   →  live gate: logs 🚫 streak_pause and returns None.
+    STREAK_PAUSE_MIN_LOSSES: int   = int(os.getenv("STREAK_PAUSE_MIN_LOSSES", "2"))
+    STREAK_PAUSE_COOLDOWN:   float = float(os.getenv("STREAK_PAUSE_COOLDOWN", "900"))  # 15 min
+    STREAK_PAUSE_LIVE:       bool  = os.getenv("STREAK_PAUSE_LIVE", "false").lower() == "true"
+
     # ── Asymmetric Polymarket mid-cache polling ──────────────────────────────
     # The PolymarketMidCache polls every subscribed YES/NO token at the active
     # interval. With 4 assets × 2 tokens that's 8 calls/sec on the CLOB API,

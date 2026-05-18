@@ -56,7 +56,7 @@ logging.getLogger("py_clob_client_v2.http_helpers.helpers").setLevel(logging.CRI
 
 # Core imports
 from config import Config, RedisCache
-from components import Components
+from lib.components import Components
 from redeem import run_redeem_non_interactive
 from lib.helpers import  get_utc_now, normalize_asset
 from lib.telegram_alert import send_alert
