@@ -1319,7 +1319,7 @@ class OrderManager:
                     )
                     candle_seconds = get_seconds_since_5m_start(get_utc_now())
                     asyncio.create_task(send_alert(
-                        f"✅ <b>BUY {token_short} {asset[:3]}</b> <code>({candle_seconds})</code>\n"
+                        f"✅ <b>BUY {token_short} {asset[:3]}</b> <i>({candle_seconds})</i>\n"
                         f"${size:.2f}@{order_price:.3f} → {label} {exec_time:.1f}s"
                     ))                    
                     did_succeed = True
@@ -2257,7 +2257,7 @@ class OrderManager:
                                 await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="counter_signal")
                                 emoji = "🟢" if pnl_pct > 0 else "🔴"
                                 asyncio.create_task(send_alert(
-                                    f"<b>{emoji} {asset[:3]} counter signal</b> <code>({candle_seconds})</code>\n"
+                                    f"<b>{emoji} {asset[:3]} counter signal</b> <i>({candle_seconds})</i>\n"
                                     f"pnl {pnl_pct:.1f}%"
                                 ))
                                 return
@@ -2282,8 +2282,8 @@ class OrderManager:
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="expiry")
 
                     asyncio.create_task(send_alert(
-                        f"<b>{emoji} {asset[:3]} closure</b> <code>({candle_seconds})</code>\n"
-                        f"{seconds_to_expiry:.0f}s to bar end | pnl {pnl_pct:.1f}%"
+                        f"<b>{emoji} {asset[:3]} CLOSURE</b> <i>({candle_seconds})</i>\n"
+                        f"pnl {pnl_pct:.1f} | price {current_price:.3f}%"
                     ))
                     return
 
@@ -2292,7 +2292,7 @@ class OrderManager:
                     self.redis.hincrby(f"stats:trade:{asset}", "tp", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="tp")
-                    asyncio.create_task(send_alert(f"<b>🟢 {asset[:3]} TP HIT</b> <code>({candle_seconds})</code>\n"
+                    asyncio.create_task(send_alert(f"<b>🟢 {asset[:3]} TP HIT</b> <i>({candle_seconds})</i>\n"
                                                    f"pnl {pnl_pct:.1f}% | price {current_price:.3f}"))
                     return
 
@@ -2300,7 +2300,7 @@ class OrderManager:
                     logger.info(f"🔴 Manage positions {asset} SL HIT | {pnl_pct:.1f}% <= -{sl_pct:.1f}% | price {current_price:.3f}")
                     self.redis.hincrby(f"stats:trade:{asset}", "sl", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="sl")
-                    asyncio.create_task(send_alert(f"<b>🔴 {asset[:3]} SL HIT</b> <code>({candle_seconds})</code>\n"
+                    asyncio.create_task(send_alert(f"<b>🔴 {asset[:3]} SL HIT</b> <i>({candle_seconds})</i>\n"
                                                    f"pnl {pnl_pct:.1f}% | price {current_price:.3f}"))
                     return
 
@@ -2309,7 +2309,7 @@ class OrderManager:
                     self.redis.hincrby(f"stats:trade:{asset}", "trail_stop", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="trail")
-                    asyncio.create_task(send_alert(f"<b>🟠 {asset[:3]} TRAIL HIT</b> <code>({candle_seconds})</code>\n"
+                    asyncio.create_task(send_alert(f"<b>🟠 {asset[:3]} TRAIL HIT</b> <i>({candle_seconds})</i>\n"
                                                    f"peak {max_pnl_pct:.1f}% | pnl {pnl_pct:.1f}% | price {current_price:.3f}"))
                     return
 

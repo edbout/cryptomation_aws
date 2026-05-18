@@ -461,7 +461,7 @@ async def main():
 
     logger.info("🚀 main | Starting | {msg}")
     if not Config.DRY_RUN:
-        await send_alert(f"<b>🚀 Restarted Bot</b>\n <code>{msg}</code>")
+        await send_alert(f"<b>🚀 Restarted Bot</b>\n {msg}")
 
     # Clear orders + start background threads
     await order_mgr.clear_open_orders()
