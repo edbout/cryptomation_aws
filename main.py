@@ -128,7 +128,7 @@ async def execute_trading_validation(symbol: str = None) -> Optional[Dict]:
     
     global BYBIT_MANAGER
     if BYBIT_MANAGER is None:
-        logger.error(" execute_trading_validation | BYBIT_MANAGER is None")
+        logger.error("✗ execute_trading_validation | BYBIT_MANAGER is None")
         return None
     
     logger.debug("🎯 execute_trading_validation | Trading validation%s", f" for {symbol}" if symbol else "")
@@ -146,7 +146,7 @@ async def execute_trading_validation(symbol: str = None) -> Optional[Dict]:
     signals: List[Tuple[str, str, float, float, dict]] = [s for s in raw_signals if isinstance(s, tuple)]
 
     if not signals:
-        logger.debug("No signals for %s", symbol or "all")
+        logger.info("✓ No signals for %s", symbol or "all")
         if not symbol:  # Full scan handles approvals
             await handle_next_markets_approvals()
         return None

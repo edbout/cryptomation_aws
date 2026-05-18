@@ -1317,8 +1317,9 @@ class OrderManager:
                         f"✅ exec_order {label} {asset} | {token_short} | "
                         f"${size:.2f}@{order_price:.3f} → {exec_time:.1f}s"
                     )
+                    candle_seconds = get_seconds_since_5m_start(get_utc_now())
                     asyncio.create_task(send_alert(
-                        f"✅ <b>BUY {token_short} {asset[:3]}</b>\n"
+                        f"✅ <b>BUY {token_short} {asset[:3]}</b> <code>({candle_seconds})</code>\n"
                         f"${size:.2f}@{order_price:.3f} → {label} {exec_time:.1f}s"
                     ))                    
                     did_succeed = True
@@ -1736,7 +1737,7 @@ class OrderManager:
 
         active_asset_key = f"active_{token_id}"
         if self.redis.exists(active_asset_key):
-            logger.debug(f"⏳ validate_adjust_price {asset:>8} | active order {active_asset_key} already exists | skipped")
+            logger.info(f"⏳ validate_adjust_price {asset:>8} | active order {active_asset_key} already exists | skipped")
             return None
 
         avg_price = getattr(stats, 'avg_price', 0.0)
@@ -1762,14 +1763,14 @@ class OrderManager:
         # Dead zone and closing zone — hard exits
         if candle_seconds < 5:
             logger.info(
-                f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
+                f"✗ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
                 f"s={candle_seconds} | dead zone (feed lag)"
             )
             return None
         
         if candle_seconds > 285:
             logger.info(
-                f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
+                f"✗ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
                 f"s={candle_seconds} | closing zone (exec lag)"
             )
             return None
@@ -1790,7 +1791,7 @@ class OrderManager:
                 if self._weak_signal_last_bar.get(asset) != bar_start:
                     self._weak_signal_last_bar[asset] = bar_start
                     logger.info(
-                        f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
+                        f"✗ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
                         f"s={candle_seconds} | bar-open weak signal: "
                         f"|{confidence:.3f}%| < {BAR_OPEN_MIN_PCT}% — skip"
                     )
@@ -1811,7 +1812,7 @@ class OrderManager:
                         obi_ok = (is_yes and obi > 0.10) or (not is_yes and obi < -0.10)
                         if not obi_ok:
                             logger.info(
-                                f"⏳ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
+                                f"✗ validate_adjust_price {asset:>8} | tm={trigger_minute} | "
                                 f"s={candle_seconds} | bar-open OBI not confirmed: "
                                 f"{obi:+.3f} for {token} — skip"
                             )
@@ -1822,7 +1823,7 @@ class OrderManager:
             except Exception as obi_err:
                 # If we can't read OBI, don't trade bar-open (too risky without confirmation)
                 logger.info(
-                    f"⏳ validate_adjust_price {asset:>8} | bar-open OBI unavailable ({obi_err}) — skip"
+                    f"✗ validate_adjust_price {asset:>8} | bar-open OBI unavailable ({obi_err}) — skip"
                 )
                 return None
         else:
@@ -1976,7 +1977,7 @@ class OrderManager:
                 logger.debug(f"✅ store_order_permanent | New order {order_id[:8]} {asset} {side} {size:.1f}@{price:.3f}")
 
         except Exception as e:
-            logger.error(f"store_order_permanent | Store order exception: {type(e).__name__}: {e}", exc_info=True)
+            logger.error(f"✗ store_order_permanent | Store order exception: {type(e).__name__}: {e}", exc_info=True)
             return
 
         # Dry-run performance tracking — written unconditionally so the dashboard can query results later.
@@ -2047,7 +2048,7 @@ class OrderManager:
 
             if outcome_price < 0 or outcome_price > 1:
                 logger.warning(
-                    f"polymarket_order_outcome {asset} | Invalid outcome_price={outcome_price} for {token_id[:16]}"
+                    f"✗ polymarket_order_outcome {asset} | Invalid outcome_price={outcome_price} for {token_id[:16]}"
                 )
                 return False
 
@@ -2224,6 +2225,8 @@ class OrderManager:
                     f"TP:{tp_price_target:.3f} | SL:{sl_pct}% | Max:{max_pnl_pct:+.1f}%  | Trail:{trailing_stop_pct:+.1f}%"
                 )
 
+                candle_seconds = get_seconds_since_5m_start(get_utc_now())
+
                 # ── POST-ENTRY COUNTER-SIGNAL CHECK ─────────────────────────
                 # If all three data sources strongly flip direction after entry, exit early.
                 # Avoids riding a position into confirmed reversal.
@@ -2252,6 +2255,11 @@ class OrderManager:
                                     f"pct={pct:+.2f}% OBI={obi:+.3f} | closing early"
                                 )
                                 await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="counter_signal")
+                                emoji = "🟢" if pnl_pct > 0 else "🔴"
+                                asyncio.create_task(send_alert(
+                                    f"<b>{emoji} {asset[:3]} counter signal</b> <code>({candle_seconds})</code>\n"
+                                    f"pnl {pnl_pct:.1f}%"
+                                ))
                                 return
                 except Exception as cs_err:
                     logger.debug(f"⚠️ Manage positions {asset} | counter-signal check failed: {cs_err}")
@@ -2261,7 +2269,7 @@ class OrderManager:
                 # Highest priority: force-close within 20s of bar expiry.
                 # Binary markets resolve instantly at bar end — holding to resolution
                 # means the losing token collapses to ~0.01 with no exit possible.
-                seconds_to_expiry = 300 - get_seconds_since_5m_start(get_utc_now())
+                seconds_to_expiry = 300 - candle_seconds
                 if seconds_to_expiry <= 35:
                     emoji = "🟢" if pnl_pct > 0 else "🔴"
                     logger.info(
@@ -2274,7 +2282,7 @@ class OrderManager:
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="expiry")
 
                     asyncio.create_task(send_alert(
-                        f"<b>{emoji} {asset[:3]} closure</b>\n"
+                        f"<b>{emoji} {asset[:3]} closure</b> <code>({candle_seconds})</code>\n"
                         f"{seconds_to_expiry:.0f}s to bar end | pnl {pnl_pct:.1f}%"
                     ))
                     return
@@ -2284,7 +2292,7 @@ class OrderManager:
                     self.redis.hincrby(f"stats:trade:{asset}", "tp", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="tp")
-                    asyncio.create_task(send_alert(f"<b>🟢 {asset[:3]} TP HIT</b>\n"
+                    asyncio.create_task(send_alert(f"<b>🟢 {asset[:3]} TP HIT</b> <code>({candle_seconds})</code>\n"
                                                    f"pnl {pnl_pct:.1f}% | price {current_price:.3f}"))
                     return
 
@@ -2292,7 +2300,7 @@ class OrderManager:
                     logger.info(f"🔴 Manage positions {asset} SL HIT | {pnl_pct:.1f}% <= -{sl_pct:.1f}% | price {current_price:.3f}")
                     self.redis.hincrby(f"stats:trade:{asset}", "sl", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="sl")
-                    asyncio.create_task(send_alert(f"<b>🔴 {asset[:3]} SL HIT</b>\n"
+                    asyncio.create_task(send_alert(f"<b>🔴 {asset[:3]} SL HIT</b> <code>({candle_seconds})</code>\n"
                                                    f"pnl {pnl_pct:.1f}% | price {current_price:.3f}"))
                     return
 
@@ -2301,7 +2309,7 @@ class OrderManager:
                     self.redis.hincrby(f"stats:trade:{asset}", "trail_stop", 1)
                     self.redis.hincrby(f"stats:trade:{asset}", "correct_direction", 1)
                     await self._close_with_cleanup(asset, token_id, size, cooldown_key, reason="trail")
-                    asyncio.create_task(send_alert(f"<b>🟠 {asset[:3]} TRAIL HIT</b>\n"
+                    asyncio.create_task(send_alert(f"<b>🟠 {asset[:3]} TRAIL HIT</b> <code>({candle_seconds})</code>\n"
                                                    f"peak {max_pnl_pct:.1f}% | pnl {pnl_pct:.1f}% | price {current_price:.3f}"))
                     return
 
