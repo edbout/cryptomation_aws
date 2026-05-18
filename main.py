@@ -13,6 +13,7 @@ from typing import Dict, Optional, List, Tuple, Any
 from logging.handlers import TimedRotatingFileHandler
 from dataclasses import dataclass
 import time
+import subprocess
 
 UTC = ZoneInfo("UTC")
 
@@ -453,8 +454,14 @@ async def main():
     log_config()
     checker.log_status()
 
-    logger.info("🚀 main | Starting")
-    await send_alert(f"<b>🚀 Restarted Bot</b>")
+    msg = subprocess.check_output(
+        ["git", "log", "-1", "--pretty=%s"],
+        text=True
+    ).strip()
+
+    logger.info("🚀 main | Starting | {msg}")
+    if not Config.DRY_RUN:
+        await send_alert(f"<b>🚀 Restarted Bot</b>\n <code>{msg}</code>")
 
     # Clear orders + start background threads
     await order_mgr.clear_open_orders()
