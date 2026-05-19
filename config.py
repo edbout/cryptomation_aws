@@ -50,6 +50,15 @@ class Config:
     CLOB_MAX_SPREAD = float(os.getenv("CLOB_MAX_SPREAD", "0.30"))          # max bid-ask spread (e.g. 0.30 = 30 cents)
     CLOB_MAX_SLIPPAGE_PCT = float(os.getenv("CLOB_MAX_SLIPPAGE_PCT", "7.0"))  # max estimated slippage %
 
+    # Stale-entry adverse-selection guard.
+    # Compares the live CLOB mid ((best_ask+best_bid)/2) against the WS-cache price
+    # used to compute the signal.  A large divergence means market makers have already
+    # re-priced the outcome (e.g. bar nearly resolved) while our cache is stale.
+    # STALE_ENTRY_BLOCK=false → shadow mode: logs 🔍 but never rejects (default).
+    # STALE_ENTRY_BLOCK=true  → active mode: rejects the entry with 🚫.
+    STALE_ENTRY_THRESHOLD = float(os.getenv("STALE_ENTRY_THRESHOLD", "0.12"))  # 12% divergence
+    STALE_ENTRY_BLOCK = os.getenv("STALE_ENTRY_BLOCK", "false").lower() == "true"
+
     # Kelly Criterion position sizing
     # f* = (b*p - q) / b  where b = (1 - price) / price, p = win_rate, q = 1 - p
     KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.25"))   # fractional Kelly (0.25 = quarter Kelly)

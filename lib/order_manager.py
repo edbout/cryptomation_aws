@@ -812,6 +812,28 @@ class OrderManager:
             if best_ask <= 0 or best_bid <= 0:
                 return False, "invalid book prices", mid_price
 
+            # Stale-entry adverse-selection guard.
+            # The CLOB mid ((best_ask+best_bid)/2) reflects what market makers
+            # currently think the token is worth.  If it has drifted more than
+            # STALE_ENTRY_THRESHOLD from our WS-cache price, a fast LP is likely
+            # pricing a near-resolved outcome while our cache is stale — filling
+            # at the cached price is adverse selection.
+            if mid_price > 0:
+                clob_mid = (best_ask + best_bid) / 2
+                stale_delta = abs(clob_mid - mid_price) / mid_price
+                if stale_delta > Config.STALE_ENTRY_THRESHOLD:
+                    stale_msg = (
+                        f"stale-entry-check | {asset} | "
+                        f"signal={mid_price:.4f} clob_mid={clob_mid:.4f} "
+                        f"delta={stale_delta:.1%} "
+                        f"(best_ask={best_ask:.4f} best_bid={best_bid:.4f})"
+                    )
+                    if Config.STALE_ENTRY_BLOCK:
+                        logger.warning(f"🚫 {stale_msg}")
+                        return False, f"stale-entry: delta={stale_delta:.1%} signal={mid_price:.4f} clob_mid={clob_mid:.4f}", mid_price
+                    else:
+                        logger.info(f"🔍 {stale_msg}")
+
             spread = round(best_ask - best_bid, 4)
             if spread > Config.CLOB_MAX_SPREAD:
                 return False, f"spread {spread:.3f} > max {Config.CLOB_MAX_SPREAD:.3f}", mid_price
