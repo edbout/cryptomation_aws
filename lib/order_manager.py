@@ -1183,10 +1183,12 @@ class OrderManager:
                     taking_raw = result.get("takingAmount", "")
                     
                     if status == "live" and not making_raw and not taking_raw:
-                        # FAK partial or pending — use input values as estimate
+                        # FAK partial or pending — exchange returned no fill amounts.
+                        # Use the Kelly order_price as a placeholder; actual fill price
+                        # is unknown until the order resolves. Flag as estimate in logs.
                         making = size
                         taking = round(size / order_price, 3)
-                        logger.info(f"✅ safe_place_order {asset} FAK partial | {size:.2f}@{order_price:.3f} | pending | {market_slug}")
+                        logger.info(f"✅ safe_place_order {asset} FAK partial | {size:.2f}@{order_price:.3f} (estimated, no fill amounts) | pending | {market_slug}")
                     else:
                         # Filled or FOK
                         making = round(float(making_raw or 0), 3)
@@ -1337,12 +1339,12 @@ class OrderManager:
                     exec_time = time.time() - start_time
                     logger.info(
                         f"✅ exec_order {label} {asset} | {token_short} | "
-                        f"${size:.2f}@{order_price:.3f} → {exec_time:.1f}s"
+                        f"${size:.2f}@{attempt_price:.3f} (kelly={order_price:.3f}) → {exec_time:.1f}s"
                     )
                     candle_seconds = get_seconds_since_5m_start(get_utc_now())
                     asyncio.create_task(send_alert(
                         f"✅ <b>BUY {token_short} {asset[:3]}</b> <i>({candle_seconds})</i>\n"
-                        f"${size:.2f}@{order_price:.3f} → {label} {exec_time:.1f}s"
+                        f"${size:.2f}@{attempt_price:.3f} → {label} {exec_time:.1f}s"
                     ))                    
                     did_succeed = True
                 else:

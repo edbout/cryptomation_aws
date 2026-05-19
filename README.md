@@ -60,3 +60,4 @@ Possible mitigations:
 
 19-05-26
 - Add stale-entry adverse-selection guard in `_check_clob_liquidity` (`lib/order_manager.py`): compares live CLOB mid ((best_ask+best_bid)/2) against WS-cache signal price; logs `🔍 stale-entry-check` when delta > `STALE_ENTRY_THRESHOLD` (default 12%). Ships in shadow mode (`STALE_ENTRY_BLOCK=false`); set `STALE_ENTRY_BLOCK=true` to activate hard rejection.
+- Fix misleading exec success log in `_execute_order`: now shows `attempt_price` (price actually submitted to CLOB) instead of `order_price` (original Kelly estimate); `kelly=` shown alongside for reference. FAK "live" log now explicitly flags estimated price when exchange returns no fill amounts.
