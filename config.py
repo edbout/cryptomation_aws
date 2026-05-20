@@ -13,15 +13,15 @@ except ImportError:
 
 class Config:
     """Centralized configuration from environment variables."""
-    
+
     # Runtime mode
     DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
-    
+
     # Metamask Keys (required)
     PRIVATE_KEY = os.getenv("PRIVATE_KEY", "").strip()
-    PUBLIC_KEY = os.getenv("PUBLIC_KEY", "").strip() 
+    PUBLIC_KEY = os.getenv("PUBLIC_KEY", "").strip()
     PROXY_WALLET = os.getenv("PROXY_WALLET", "").strip()
-    
+
     # Polymarket API builder code
     BUILDER_CODE = os.getenv("BUILDER_CODE", "").strip()
 
@@ -35,7 +35,7 @@ class Config:
     # before order construction and validate_adjust_price are invoked.
     # Must be >= PRICE_MAX to avoid masking valid high-confidence entries.
     NEAR_RESOLVED_THRESHOLD = float(os.getenv("NEAR_RESOLVED_THRESHOLD", "0.95"))
-    EDGE_THRESHOLD = float(os.getenv("EDGE_THRESHOLD", "10.0")) 
+    EDGE_THRESHOLD = float(os.getenv("EDGE_THRESHOLD", "10.0"))
     MIN_WIN_RATE_THRESHOLD = float(os.getenv("MIN_WIN_RATE_THRESHOLD", "60.0"))
     BAR_OPEN_MIN_PCT = 0.03 # bybit 5m move must be at least 0.03%
     BAR_OPEN_EDGE_SURCHARGE = 3.0  # extra edge % required on top of dynamic calc
@@ -83,6 +83,20 @@ class Config:
 
     # Risk: global 8-hour drawdown stop (fraction of bankroll)
     MAX_GLOBAL_8H_LOSS_PCT = float(os.getenv("MAX_GLOBAL_8H_LOSS_PCT", "0.25"))
+
+    # ── Per-asset SL base multiplier ─────────────────────────────────────────
+    # Scales the SL base (trigger_minute*3+10, capped at 22) per asset before
+    # the Polymarket-mid vol-scale is applied in order_manager.manage_positions.
+    # Higher multipliers give the position more room before the stop fires —
+    # intended to compensate for assets whose Polymarket mid swings wider on
+    # identical signals (e.g. SOL vs BTC). Default 1.0 = unchanged behavior.
+    # The final sl_pct is still capped at 35% inside manage_positions.
+    SL_BASE_MULTIPLIER: dict = {
+        "BTCUSDT": float(os.getenv("SL_BASE_MULTIPLIER_BTC", "1.0")),
+        "ETHUSDT": float(os.getenv("SL_BASE_MULTIPLIER_ETH", "1.0")),
+        "XRPUSDT": float(os.getenv("SL_BASE_MULTIPLIER_XRP", "1.0")),
+        "SOLUSDT": float(os.getenv("SL_BASE_MULTIPLIER_SOL", "1.5")),
+    }
 
     # OBI veto thresholds per asset (absolute value; signal contradicted when exceeded).
     # Raised for ETH/XRP/SOL: Bybit books are structurally ask-heavy during rallies,
@@ -185,7 +199,7 @@ class Config:
     BINANCE_ENABLED = os.getenv("BINANCE_ENABLED", "true").lower() == "true"
     BYBIT_ENABLED = os.getenv("BYBIT_ENABLED", "true").lower() == "true"
     COINBASE_ENABLED = os.getenv("COINBASE_ENABLED", "true").lower() == "true"
-    CHAINLINK_ENABLED = os.getenv("CHAINLINK_ENABLED", "true").lower() == "true"   
+    CHAINLINK_ENABLED = os.getenv("CHAINLINK_ENABLED", "true").lower() == "true"
 
     # Per-symbol trigger throttle (seconds). Mirrors Bybit _last_trigger_ts.
     TRIGGER_THROTTLE_SEC = float(os.getenv("TRIGGER_THROTTLE_SEC", "5.0"))
@@ -199,21 +213,45 @@ class Config:
     # Minimum |pct| for a source to count as an active vote (was hardcoded 0.03)
     ALIGNMENT_MIN_PCT     = float(os.getenv("ALIGNMENT_MIN_PCT", "0.03"))
 
+    # ── Raw-signal $-floor trader (separate execution path) ─────────────────
+    # Places a small fire-and-forget GTD limit order on every raw signal that
+    # passes alignment / OBI / fairvalue, BEFORE the edge check. Intent: test
+    # whether the dashboard's high raw-signal directional accuracy (paper
+    # tracker: 84-91%) translates to real PnL when stops/trails are removed.
+    #
+    # These trades are deliberately NOT subject to manage_positions (no SL,
+    # no TP, no Trail). They are placed, expire/fill, and resolve at bar end.
+    # Tracked under stats:raw_signal_trade:{asset} so they don't pollute the
+    # main strategy's stats.
+    #
+    # Co-exists with the main Kelly-sized trade: both can fire on the same
+    # signal independently. Disabled by default; flip to true to go live.
+    #
+    # Safety:
+    #   • RAW_SIGNAL_THROTTLE_SEC enforces max-1-per-token-per-window.
+    #   • RAW_SIGNAL_MAX_DAILY_USD is a hard daily $ circuit-breaker.
+    RAW_SIGNAL_TRADER_ENABLED: bool = os.getenv("RAW_SIGNAL_TRADER_ENABLED", "false").lower() == "true"
+    RAW_SIGNAL_SIZE_USD:       float = float(os.getenv("RAW_SIGNAL_SIZE_USD",       "1.0"))
+    RAW_SIGNAL_LIMIT_MULT:     float = float(os.getenv("RAW_SIGNAL_LIMIT_MULT",     "0.95"))  # 0.95 × mid (5% discount)
+    RAW_SIGNAL_EXPIRATION_SEC: int   = int(os.getenv("RAW_SIGNAL_EXPIRATION_SEC",   "300"))   # 1 bar
+    RAW_SIGNAL_THROTTLE_SEC:   int   = int(os.getenv("RAW_SIGNAL_THROTTLE_SEC",     "60"))    # ≤1 per token per min
+    RAW_SIGNAL_MAX_DAILY_USD:  float = float(os.getenv("RAW_SIGNAL_MAX_DAILY_USD",  "50.0"))  # circuit breaker
+
 class RedisCache:
     _instance = None
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
         if self._initialized:
             return
         self.client = self._connect()
         self._initialized = True
-    
+
     def _connect(self):
         max_retries = 5
         for attempt in range(max_retries):
@@ -235,12 +273,12 @@ class RedisCache:
                 time.sleep(wait)
         logger.error("✗ connect | Redis permanently unavailable")
         return None
-    
+
     @property
     def is_connected(self):
         """Check if client is connected."""
         return self.client is not None
-    
+
     def ping(self):
         """Explicit ping for connection check; reconnects if dead."""
         if not self.client:
@@ -260,4 +298,3 @@ class RedisCache:
         if self.client:
             return getattr(self.client, name)
         raise AttributeError(f"✗ getattr | Redis client unavailable; cannot call: {name}")
-    

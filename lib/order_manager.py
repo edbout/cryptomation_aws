@@ -1708,6 +1708,22 @@ class OrderManager:
             except Exception:
                 pass
 
+            # ── Raw-signal $-floor trader (separate execution path) ──────
+            # Fire a $1 limit order on every raw signal, in parallel with
+            # the normal pipeline. Throttled per-token, capped daily, never
+            # touched by manage_positions. Disabled by default — flip via
+            # Config.RAW_SIGNAL_TRADER_ENABLED. Fire-and-forget: any error
+            # is swallowed inside the module and MUST NOT block this path.
+            if Config.RAW_SIGNAL_TRADER_ENABLED:
+                try:
+                    from lib.raw_signal_trader import place_raw_signal_order
+                    asyncio.create_task(place_raw_signal_order(
+                        self.client, asset, token, order_price,
+                        trigger_minute, _candle_seconds_raw,
+                    ))
+                except Exception:
+                    pass
+
         if not stats or not stats.should_trade:
             bar_start = get_current_5m_bar_ts(time.time())
             if self._no_stats_last_bar.get(asset) != bar_start:
@@ -2216,14 +2232,18 @@ class OrderManager:
                 # Baseline: 0.30% per-second mid change in calm conditions.
                 # Example: vol=0.60% → scale=2.0 → a M2 base-16% stop widens to 32%.
                 # Hard cap at 35% to bound worst-case loss regardless of vol reading.
-                _sl_base = min(trigger_minute * 3 + 10, 22)
+                # Per-asset multiplier (Config.SL_BASE_MULTIPLIER) is applied before
+                # vol-scale so high-mid-vol assets (e.g. SOL) can get a wider baseline.
+                _sl_base_raw = min(trigger_minute * 3 + 10, 22)
+                _sl_mult = Config.SL_BASE_MULTIPLIER.get(asset, 1.0)
+                _sl_base = _sl_base_raw * _sl_mult
                 _vol = POLY_MID_CACHE.get_volatility(token_id)
                 if _vol is not None:
                     _vol_scale = max(1.0, _vol / 0.30)
                     sl_pct = min(round(_sl_base * _vol_scale, 1), 35.0)
                     logger.debug(
                         f"📐 SL vol-adjust {asset} | vol={_vol:.3f}% scale={_vol_scale:.2f}x "
-                        f"base={_sl_base}% → sl={sl_pct}%"
+                        f"mult={_sl_mult:.2f}x base={_sl_base_raw}%→{_sl_base:.1f}% → sl={sl_pct}%"
                     )
                 else:
                     sl_pct = float(_sl_base)

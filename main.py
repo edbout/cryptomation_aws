@@ -19,7 +19,17 @@ UTC = ZoneInfo("UTC")
 
 # Setup logging FIRST
 def setup_logging() -> None:
-    """Production logging setup with hourly log rotation."""
+    """Production logging setup: fresh bot.log on each restart, daily rotation, 7 days retention.
+
+    Console handler always on (picked up by systemd/journald/docker logs on AWS).
+    File handler writes to ./log/bot.log; on startup any existing bot.log is rolled
+    over to bot.log.YYYY-MM-DD so each restart gets a clean file for log analysis.
+    Disable file output with LOG_TO_FILE=false.
+    """
+    # Always load .env so other modules see the same env vars regardless of host.
+    from dotenv import load_dotenv
+    load_dotenv()
+
     logger = logging.getLogger()
     logger.handlers.clear()  # prevent double-logging
     logger.setLevel(logging.INFO)
@@ -32,10 +42,8 @@ def setup_logging() -> None:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # Local dev file logging with hourly rotation
-    if os.getenv("HEROKU") != "true":
-        from dotenv import load_dotenv
-        load_dotenv()
+    # File logging (opt out via LOG_TO_FILE=false)
+    if os.getenv("LOG_TO_FILE", "true").lower() == "true":
         os.makedirs("./log", exist_ok=True)
 
         file_handler = TimedRotatingFileHandler(
@@ -47,6 +55,13 @@ def setup_logging() -> None:
         )
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
+
+        # Force a fresh bot.log on every restart: roll the existing file to
+        # bot.log.YYYY-MM-DD (matches the daily rotation suffix scheme) and
+        # reopen a clean bot.log. backupCount=7 still prunes older files.
+        if os.path.exists("./log/bot.log") and os.path.getsize("./log/bot.log") > 0:
+            file_handler.doRollover()
+
         logger.addHandler(file_handler)
 
 setup_logging()
