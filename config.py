@@ -213,6 +213,26 @@ class Config:
     # Minimum |pct| for a source to count as an active vote (was hardcoded 0.03)
     ALIGNMENT_MIN_PCT     = float(os.getenv("ALIGNMENT_MIN_PCT", "0.03"))
 
+    # ── Independent suppression-outcome resolver ─────────────────────────────
+    # Drives the background loop in lib/suppression_store.resolve_loop that
+    # emits 🔍 suppressed_outcome for every recorded suppression at bar end +
+    # delay, independent of whether a real trade was placed in the same epoch.
+    #
+    # The pre-existing real-trade-driven path in order_manager.polymarket_order_outcome
+    # still runs — pop() is atomic so whichever path wins the race emits exactly
+    # once. With this resolver running, coverage goes from ~1% of suppressions
+    # (real-trade epochs only) to ~100% (all epochs), enabling per-asset
+    # threshold calibration with statistically meaningful sample sizes.
+    SUPPRESSED_OUTCOME_INDEPENDENT_ENABLED: bool = (
+        os.getenv("SUPPRESSED_OUTCOME_INDEPENDENT_ENABLED", "true").lower() == "true"
+    )
+    SUPPRESSED_OUTCOME_RESOLVE_DELAY_SEC: int = int(
+        os.getenv("SUPPRESSED_OUTCOME_RESOLVE_DELAY_SEC", "25")
+    )  # seconds after bar close before attempting resolution
+    SUPPRESSED_OUTCOME_SCAN_INTERVAL_SEC: int = int(
+        os.getenv("SUPPRESSED_OUTCOME_SCAN_INTERVAL_SEC", "30")
+    )  # how often the resolve loop wakes up to scan _STORE
+
     # ── Raw-signal outcome resolution source ─────────────────────────────────
     # Source of truth used by bybit_feed.BybitCandle5m to mark :na outcomes
     # in prices:signals_raw at bar close.

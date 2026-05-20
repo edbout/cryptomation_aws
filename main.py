@@ -510,7 +510,16 @@ async def main():
     # callbacks use. Late binding avoids a circular import in lib/binance_feed.
     binance_feed.attach_validator(execute_trading_validation, loop)
     binance_feed.start()
-         
+
+    # Independent suppression-outcome resolver: emits 🔍 suppressed_outcome
+    # for EVERY suppression at bar end + delay, not just ones whose epoch
+    # happened to also have a real trade resolve. Disable via
+    # SUPPRESSED_OUTCOME_INDEPENDENT_ENABLED=false. Fire-and-forget task;
+    # no shutdown coordination needed (loop dies with the event loop).
+    from lib import suppression_store
+    asyncio.create_task(suppression_store.resolve_loop(client, finder))
+    logger.info("✓ main | suppression_store.resolve_loop started")
+
     sched_task = asyncio.create_task(timer_loop())
 
     def _on_sigterm():
