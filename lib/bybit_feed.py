@@ -143,8 +143,19 @@ class BybitCandle5m:
 
         return len(cur_members)
 
-    def _update_raw_outcomes(self, symbol: str, outcome: str) -> int:
-        """Resolve :na outcomes in prices:signals_raw:{asset} at bar close."""
+    def _update_raw_outcomes(self, symbol: str, bybit_outcome: str) -> int:
+        """Resolve :na outcomes in prices:signals_raw:{asset} at bar close.
+
+        Dispatches to the Bybit-based or Polymarket-based resolver depending
+        on Config.RAW_OUTCOME_SOURCE. Both modes emit a 🔍 raw_outcome_compare
+        per-bar summary so the disagreement rate can be tracked from logs.
+        """
+        if Config.RAW_OUTCOME_SOURCE == "polymarket":
+            return self._update_raw_outcomes_pm(symbol, bybit_outcome)
+        return self._update_raw_outcomes_bybit(symbol, bybit_outcome)
+
+    def _update_raw_outcomes_bybit(self, symbol: str, outcome: str) -> int:
+        """Legacy: outcome = whichever direction the Bybit 5m bar closed."""
         now = datetime.now(UTC)
         now_ts = now.timestamp()
         window_start = now_ts - 360
@@ -174,6 +185,108 @@ class BybitCandle5m:
         if updated:
             pipe.execute()
             logger.debug("\U0001f504 update_raw_outcomes | %s: resolved %d → %s", symbol, updated, outcome)
+
+        return updated
+
+    def _update_raw_outcomes_pm(self, symbol: str, bybit_outcome: str) -> int:
+        """Resolve :na outcomes against the Polymarket token mid at bar close.
+
+        For each :na record, look up the live Polymarket mid for the record's
+        token via POLY_MID_CACHE.
+
+          • mid > 0.75  → the bought side won  (encoded relative to bybit_dir)
+          • mid < 0.25  → the bought side lost (encoded relative to bybit_dir)
+          • else        → resolution in flight; left :na, retried next bar,
+                          or expires after the 6 min stale-cleanup window.
+
+        Record layout (legacy 10-field or current 11-field):
+          [min, sec, price, pct, token, bybit_dir, (binance_dir,) cb_dir,
+           cl_dir, agree, outcome]
+        bybit_dir tells us which side was bought: UP→YES, DOWN→NO. The output
+        outcome is encoded as 'up'/'down' matching the Bybit-equivalent
+        semantic (the direction the bar actually moved) so downstream readers
+        (seed_stats_from_raw) work unchanged regardless of source.
+
+        Also emits a 🔍 raw_outcome_compare per-bar summary comparing the PM
+        outcome to what Bybit-based resolution would have written, so the
+        disagreement rate between the two sources is measurable from logs.
+        """
+        now = datetime.now(UTC)
+        now_ts = now.timestamp()
+        window_start = now_ts - 360
+
+        key = f"prices:signals_raw:{normalize_asset(symbol)}"
+        cur_members = self.redis.zrangebyscore(key, window_start, now_ts)
+
+        stale_na = [m for m in self.redis.zrangebyscore(key, '-inf', window_start - 1) if m.endswith(':na')]
+        if stale_na:
+            self.redis.zrem(key, *stale_na)
+            logger.info("\U0001f9f9 update_raw_outcomes_pm | %s: removed %d stale :na", symbol, len(stale_na))
+
+        if not cur_members:
+            return 0
+
+        pipe = self.redis.pipeline()
+        updated = 0
+        unresolved = 0      # PM mid still in [0.25, 0.75] — left :na for retry
+        missing_mid = 0     # POLY_MID_CACHE has no entry for this token
+        agree = 0
+        disagree = 0
+
+        for member in cur_members:
+            if not member.endswith(':na'):
+                continue
+            parts = member.split(':')
+            # Legacy 10-field or current 11-field record; in both layouts
+            # token=parts[4] and bybit_dir=parts[5]. See seed_stats_from_raw
+            # in price_tracker.py for the canonical layout reference.
+            if len(parts) < 10:
+                continue
+            token = parts[4]
+            bybit_dir = parts[5].upper() if len(parts) > 5 else ''
+
+            mid = POLY_MID_CACHE.get(token)
+            if mid is None:
+                missing_mid += 1
+                continue
+
+            # Translate Polymarket token resolution → bar-direction outcome,
+            # preserving the existing semantic where "up"/"down" describe the
+            # *actual* bar direction (not the bought-side outcome).
+            if mid > 0.75:
+                # Bought token won. UP signal bought YES → bar went UP.
+                # DOWN signal bought NO → bar went DOWN.
+                pm_outcome = 'up' if bybit_dir == 'UP' else 'down'
+            elif mid < 0.25:
+                # Bought token lost; bar went the opposite of the signal.
+                pm_outcome = 'down' if bybit_dir == 'UP' else 'up'
+            else:
+                unresolved += 1
+                continue
+
+            if pm_outcome == bybit_outcome:
+                agree += 1
+            else:
+                disagree += 1
+
+            base = member[:-3]
+            new_member = f"{base}:{pm_outcome}"
+            pipe.zrem(key, member)
+            pipe.zadd(key, {new_member: now_ts})
+            updated += 1
+
+        if updated:
+            pipe.execute()
+
+        # Always emit the comparison line when there were any candidates so
+        # the operator can see the PM-vs-Bybit disagreement rate per bar.
+        # Quiet when there's nothing to compare to avoid log spam on idle bars.
+        if updated or unresolved or missing_mid:
+            logger.info(
+                "\U0001f50d raw_outcome_compare | %s | resolved=%d agree=%d "
+                "disagree=%d unresolved=%d missing_mid=%d | bybit_said=%s",
+                symbol, updated, agree, disagree, unresolved, missing_mid, bybit_outcome
+            )
 
         return updated
 

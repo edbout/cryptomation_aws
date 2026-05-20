@@ -213,6 +213,25 @@ class Config:
     # Minimum |pct| for a source to count as an active vote (was hardcoded 0.03)
     ALIGNMENT_MIN_PCT     = float(os.getenv("ALIGNMENT_MIN_PCT", "0.03"))
 
+    # ── Raw-signal outcome resolution source ─────────────────────────────────
+    # Source of truth used by bybit_feed.BybitCandle5m to mark :na outcomes
+    # in prices:signals_raw at bar close.
+    #
+    # "polymarket" (default): for each :na record, look up the live Polymarket
+    #   token mid via POLY_MID_CACHE; classify >0.75 as the bought side
+    #   winning, <0.25 as the bought side losing, in-between as still
+    #   in-flight (left :na to be retried next bar). Encodes the result as
+    #   "up"/"down" matching Bybit-equivalent semantics so downstream readers
+    #   (seed_stats_from_raw, dashboards) work unchanged.
+    # "bybit": legacy behavior — outcome is whichever direction the Bybit 5m
+    #   bar closed (up if pct_change > 0, else down). Faster and always
+    #   resolves, but doesn't account for Polymarket-specific resolution lag,
+    #   pin-risk, or oracle disagreements.
+    #
+    # Both modes also emit a 🔍 raw_outcome_compare per-bar log line so the
+    # disagreement rate between the two sources can be quantified from logs.
+    RAW_OUTCOME_SOURCE: str = os.getenv("RAW_OUTCOME_SOURCE", "polymarket").lower()
+
     # ── Raw-signal $-floor trader (separate execution path) ─────────────────
     # Places a small fire-and-forget GTD limit order on every raw signal that
     # passes alignment / OBI / fairvalue, BEFORE the edge check. Intent: test
