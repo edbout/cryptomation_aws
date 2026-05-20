@@ -269,7 +269,7 @@ class Config:
     # Safety:
     #   • RAW_SIGNAL_THROTTLE_SEC enforces max-1-per-token-per-window.
     #   • RAW_SIGNAL_MAX_DAILY_USD is a hard daily $ circuit-breaker.
-    RAW_SIGNAL_TRADER_ENABLED: bool = os.getenv("RAW_SIGNAL_TRADER_ENABLED", "false").lower() == "true"
+    RAW_SIGNAL_TRADER_ENABLED: bool = os.getenv("RAW_SIGNAL_TRADER_ENABLED", "true").lower() == "true"
     RAW_SIGNAL_SIZE_USD:       float = float(os.getenv("RAW_SIGNAL_SIZE_USD",       "1.0"))
     RAW_SIGNAL_LIMIT_MULT:     float = float(os.getenv("RAW_SIGNAL_LIMIT_MULT",     "0.95"))  # 0.95 × mid (5% discount)
     RAW_SIGNAL_EXPIRATION_SEC: int   = int(os.getenv("RAW_SIGNAL_EXPIRATION_SEC",   "300"))   # 1 bar
